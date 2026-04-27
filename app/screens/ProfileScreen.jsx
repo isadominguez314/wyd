@@ -103,11 +103,10 @@ const ProfileScreen = () => {
 
   return (
     <ScreenContainer>
-      <SectionCard title="Profile">
-        <ReadOnlyRow label="First name" value={state.userProfile.firstName} />
-        <ReadOnlyRow label="Last name" value={state.userProfile.lastName} />
-        <ReadOnlyRow label="Username" value={state.userProfile.username} />
-      </SectionCard>
+      <SectionCard
+        title={`${state.userProfile.firstName} ${state.userProfile.lastName}`}
+        subtitle={`@${state.userProfile.username}`}
+      ></SectionCard>
 
       <SectionCard title="Habits">
         <View style={styles.row}>

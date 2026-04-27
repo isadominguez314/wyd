@@ -11,6 +11,7 @@ import ArchiveScreen from "../screens/ArchiveScreen";
 import SearchScreen from "../screens/SearchScreen";
 import FeedScreen from "../screens/FeedScreen";
 import ProfileScreen from "../screens/ProfileScreen";
+import { MaterialIcons } from "@expo/vector-icons";
 
 const Tab = createBottomTabNavigator();
 const HomeStack = createNativeStackNavigator();
@@ -78,17 +79,36 @@ const AppNavigator = () => {
       <Tab.Screen
         name="HomeTab"
         component={HomeStackNavigator}
-        options={{ title: "Home" }}
+        options={{
+          title: "Home",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="home" size={size} color={color} />
+          ),
+        }}
       />
       <Tab.Screen
         name="FeedTab"
         component={FeedScreen}
-        options={{ title: "Feed" }}
+        options={{
+          title: "Feed",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="question-answer" size={size} color={color} />
+          ),
+        }}
       />
       <Tab.Screen
         name="ProfileTab"
         component={ProfileScreen}
-        options={{ title: "Profile" }}
+        options={{
+          title: "Profile",
+          tabBarIcon: ({ focused, size }) => (
+            <MaterialIcons
+              name="person"
+              size={size}
+              color={focused ? theme.colors.text : theme.colors.mutedText}
+            />
+          ),
+        }}
       />
     </Tab.Navigator>
   );

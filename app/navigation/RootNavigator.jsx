@@ -7,6 +7,12 @@ import {
   Pressable,
   TextInput,
   Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  TouchableWithoutFeedback,
+  Keyboard,
 } from "react-native";
 import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -29,17 +35,43 @@ const navTheme = {
   },
 };
 
-const CenteredScreen = ({ title, subtitle, children }) => (
-  <View style={styles.centeredContainer}>
-    <Text style={styles.title}>{title}</Text>
-    {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
-    {children}
-  </View>
+const CenteredScreen = ({ title, subtitle, children, showLogo }) => (
+  <KeyboardAvoidingView
+    style={{ flex: 1 }}
+    behavior={Platform.OS === "ios" ? "padding" : "height"}
+  >
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <ScrollView
+        contentContainerStyle={styles.centeredContainer}
+        keyboardShouldPersistTaps="handled"
+      >
+        {showLogo && (
+          <Image
+            source={require("../../assets/logo.png")}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+        )}
+        <Text style={styles.title}>{title}</Text>
+        {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        {children}
+      </ScrollView>
+    </TouchableWithoutFeedback>
+  </KeyboardAvoidingView>
 );
 
 const AuthScreen = () => {
   const { auth, signIn, signUp, searchUsers } = useAppContext();
   const [mode, setMode] = React.useState(auth.hasAccount ? "signin" : "signup");
+  // Refs for sign-in form
+  const signInUsernameRef = React.useRef(null);
+  const signInPasswordRef = React.useRef(null);
+
+  // Refs for sign-up step 1 form
+  const signUpFirstNameRef = React.useRef(null);
+  const signUpLastNameRef = React.useRef(null);
+  const signUpUsernameRef = React.useRef(null);
+  const signUpPasswordRef = React.useRef(null);
 
   const [signupStep, setSignupStep] = React.useState(1);
   const [signupDraft, setSignupDraft] = React.useState({
@@ -95,6 +127,17 @@ const AuthScreen = () => {
       habitsList: [...prev.habitsList, nextHabit],
     }));
     setHabitInput("");
+  };
+
+  const addSuggestedHabit = (habit) => {
+    const next = habit.trim();
+    if (!next) return;
+    if (signupDraft.habitsList.includes(next)) return;
+
+    setSignupDraft((prev) => ({
+      ...prev,
+      habitsList: [...prev.habitsList, next],
+    }));
   };
 
   const removeHabit = (habit) => {
@@ -172,6 +215,7 @@ const AuthScreen = () => {
               ? "Step 2 of 3: Add habits to track."
               : "Step 3 of 3: Find friends by name or username."
       }
+      showLogo={true}
     >
       {isSignIn ? (
         <>
@@ -180,6 +224,10 @@ const AuthScreen = () => {
             placeholder="Username"
             autoCapitalize="none"
             value={signInForm.username}
+            ref={signInUsernameRef}
+            returnKeyType="next"
+            blurOnSubmit={false}
+            onSubmitEditing={() => signInPasswordRef.current?.focus()}
             onChangeText={(text) =>
               setSignInForm((prev) => ({ ...prev, username: text }))
             }
@@ -190,6 +238,10 @@ const AuthScreen = () => {
             placeholder="Password"
             secureTextEntry
             value={signInForm.password}
+            ref={signInPasswordRef}
+            returnKeyType="done"
+            blurOnSubmit={true}
+            onSubmitEditing={handleSignIn}
             onChangeText={(text) =>
               setSignInForm((prev) => ({ ...prev, password: text }))
             }
@@ -207,6 +259,10 @@ const AuthScreen = () => {
                 style={styles.input}
                 placeholder="First name"
                 value={signupDraft.firstName}
+                ref={signUpFirstNameRef}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => signUpLastNameRef.current?.focus()}
                 onChangeText={(text) =>
                   setSignupDraft((prev) => ({ ...prev, firstName: text }))
                 }
@@ -215,6 +271,10 @@ const AuthScreen = () => {
                 style={styles.input}
                 placeholder="Last name"
                 value={signupDraft.lastName}
+                ref={signUpLastNameRef}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => signUpUsernameRef.current?.focus()}
                 onChangeText={(text) =>
                   setSignupDraft((prev) => ({ ...prev, lastName: text }))
                 }
@@ -224,6 +284,10 @@ const AuthScreen = () => {
                 placeholder="Username"
                 autoCapitalize="none"
                 value={signupDraft.username}
+                ref={signUpUsernameRef}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => signUpPasswordRef.current?.focus()}
                 onChangeText={(text) =>
                   setSignupDraft((prev) => ({ ...prev, username: text }))
                 }
@@ -233,6 +297,9 @@ const AuthScreen = () => {
                 placeholder="Password"
                 secureTextEntry
                 value={signupDraft.password}
+                ref={signUpPasswordRef}
+                returnKeyType="done"
+                blurOnSubmit={true}
                 onChangeText={(text) =>
                   setSignupDraft((prev) => ({ ...prev, password: text }))
                 }
@@ -266,6 +333,29 @@ const AuthScreen = () => {
 
               <PillList items={signupDraft.habitsList} onRemove={removeHabit} />
 
+              <View style={styles.suggestionsWrap}>
+                <Text style={styles.suggestionsLabel}>Suggestions</Text>
+                <View style={styles.suggestionsRow}>
+                  {[
+                    "drink water",
+                    "exercise",
+                    "sleep 8 hours",
+                    "read",
+                    "journal",
+                  ]
+                    .filter((sugg) => !signupDraft.habitsList.includes(sugg))
+                    .map((sugg, idx) => (
+                      <Pressable
+                        key={sugg}
+                        style={styles.suggestionButton}
+                        onPress={() => addSuggestedHabit(sugg)}
+                      >
+                        <Text style={styles.suggestionText}>{sugg}</Text>
+                      </Pressable>
+                    ))}
+                </View>
+              </View>
+
               <View style={styles.actionsRow}>
                 <Pressable
                   style={[styles.smallButton, styles.secondaryButton]}
@@ -296,6 +386,7 @@ const AuthScreen = () => {
                 results={friendResults}
                 onSelect={addSignupFriend}
                 emptyText="No matching users found."
+                plainEmpty={true}
               />
 
               <PillList
@@ -339,15 +430,26 @@ const AuthScreen = () => {
   );
 };
 
+const pillColors = [
+  theme.colors.pink,
+  theme.colors.green,
+  theme.colors.blue,
+  theme.colors.purple,
+  theme.colors.orange,
+];
+
 const PillList = ({ items, onRemove }) => (
   <View style={styles.pillWrap}>
     {items.length === 0 ? (
       <Text style={styles.muted}>None added yet.</Text>
     ) : (
-      items.map((item) => (
+      items.map((item, idx) => (
         <Pressable
           key={item}
-          style={styles.pill}
+          style={[
+            styles.pill,
+            { backgroundColor: pillColors[idx % pillColors.length] },
+          ]}
           onPress={() => onRemove?.(item)}
           disabled={!onRemove}
         >
@@ -406,6 +508,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: theme.colors.background,
     padding: theme.spacing.lg,
+  },
+  logo: {
+    width: 200,
+    height: 200,
+    alignSelf: "center",
+    marginBottom: theme.spacing.lg,
   },
   title: {
     fontSize: 24,
@@ -475,10 +583,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     gap: theme.spacing.sm,
-    marginTop: theme.spacing.sm,
+    marginTop: theme.spacing.xl,
   },
   secondaryButton: {
-    backgroundColor: theme.colors.blue,
+    backgroundColor: theme.colors.primary,
   },
   pillWrap: {
     flexDirection: "row",
@@ -498,6 +606,32 @@ const styles = StyleSheet.create({
   },
   muted: {
     color: theme.colors.mutedText,
+  },
+  suggestionsWrap: {
+    marginTop: theme.spacing.xl,
+    marginBottom: theme.spacing.xl,
+  },
+  suggestionsLabel: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+    marginBottom: theme.spacing.xs,
+  },
+  suggestionsRow: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    flexWrap: "wrap",
+  },
+  suggestionButton: {
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    backgroundColor: theme.colors.background,
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+  },
+  suggestionText: {
+    color: theme.colors.mutedText,
+    fontWeight: "600",
   },
 });
 

@@ -25,8 +25,11 @@ const ACTIONS = {
   ADD_DAILY_JOURNAL: "ADD_DAILY_JOURNAL",
   ADD_WEEKLY_REPORT: "ADD_WEEKLY_REPORT",
   ADD_INDIVIDUAL_ENTRY: "ADD_INDIVIDUAL_ENTRY",
+  SET_INDIVIDUAL_ENTRIES: "SET_INDIVIDUAL_ENTRIES",
   UPDATE_HABITS: "UPDATE_HABITS",
   UPDATE_FRIENDS: "UPDATE_FRIENDS",
+  UPDATE_DAILY_JOURNAL: "UPDATE_DAILY_JOURNAL",
+  UPDATE_WEEKLY_REPORT: "UPDATE_WEEKLY_REPORT",
   RESET_STATE: "RESET_STATE",
 };
 
@@ -96,6 +99,11 @@ const appReducer = (state, action) => {
         ...state,
         individualEntries: [action.payload, ...state.individualEntries],
       };
+    case ACTIONS.SET_INDIVIDUAL_ENTRIES:
+      return {
+        ...state,
+        individualEntries: action.payload,
+      };
     case ACTIONS.UPDATE_HABITS: {
       const payload = Array.isArray(action.payload)
         ? {
@@ -124,6 +132,24 @@ const appReducer = (state, action) => {
           friendsList: action.payload,
         },
       };
+    case ACTIONS.UPDATE_DAILY_JOURNAL: {
+      const { id, updates } = action.payload;
+      return {
+        ...state,
+        dailyJournals: state.dailyJournals.map((journal) =>
+          journal.date === id ? { ...journal, ...updates } : journal,
+        ),
+      };
+    }
+    case ACTIONS.UPDATE_WEEKLY_REPORT: {
+      const { id, updates } = action.payload;
+      return {
+        ...state,
+        weeklyReports: state.weeklyReports.map((report) =>
+          report.date === id ? { ...report, ...updates } : report,
+        ),
+      };
+    }
     case ACTIONS.RESET_STATE:
       return INITIAL_DATA;
     default:
@@ -275,11 +301,66 @@ export const AppProvider = ({ children }) => {
         const username = auth.currentUsername || state.userProfile.username;
         dispatch({
           type: ACTIONS.ADD_DAILY_JOURNAL,
-          payload: { ...payload, username },
+          payload: { ...payload, username, likes: [], comments: [] },
         });
       },
-      addWeeklyReport: (payload) =>
-        dispatch({ type: ACTIONS.ADD_WEEKLY_REPORT, payload }),
+      addWeeklyReport: (payload) => {
+        const username = auth.currentUsername || state.userProfile.username;
+        dispatch({
+          type: ACTIONS.ADD_WEEKLY_REPORT,
+          payload: { ...payload, username, likes: [], comments: [] },
+        });
+      },
+      toggleLikeOnDailyJournal: (journalDate, currentUsername) => {
+        const journal = state.dailyJournals.find((j) => j.date === journalDate);
+        if (!journal) return;
+        const likes = journal.likes || [];
+        const newLikes = likes.includes(currentUsername)
+          ? likes.filter((u) => u !== currentUsername)
+          : [...likes, currentUsername];
+        dispatch({
+          type: ACTIONS.UPDATE_DAILY_JOURNAL,
+          payload: { id: journalDate, updates: { likes: newLikes } },
+        });
+      },
+      toggleLikeOnWeeklyReport: (reportDate, currentUsername) => {
+        const report = state.weeklyReports.find((r) => r.date === reportDate);
+        if (!report) return;
+        const likes = report.likes || [];
+        const newLikes = likes.includes(currentUsername)
+          ? likes.filter((u) => u !== currentUsername)
+          : [...likes, currentUsername];
+        dispatch({
+          type: ACTIONS.UPDATE_WEEKLY_REPORT,
+          payload: { id: reportDate, updates: { likes: newLikes } },
+        });
+      },
+      addCommentOnDailyJournal: (journalDate, username, commentText) => {
+        const journal = state.dailyJournals.find((j) => j.date === journalDate);
+        if (!journal) return;
+        const comments = journal.comments || [];
+        const newComments = [
+          ...comments,
+          { username, text: commentText, date: new Date().toISOString() },
+        ];
+        dispatch({
+          type: ACTIONS.UPDATE_DAILY_JOURNAL,
+          payload: { id: journalDate, updates: { comments: newComments } },
+        });
+      },
+      addCommentOnWeeklyReport: (reportDate, username, commentText) => {
+        const report = state.weeklyReports.find((r) => r.date === reportDate);
+        if (!report) return;
+        const comments = report.comments || [];
+        const newComments = [
+          ...comments,
+          { username, text: commentText, date: new Date().toISOString() },
+        ];
+        dispatch({
+          type: ACTIONS.UPDATE_WEEKLY_REPORT,
+          payload: { id: reportDate, updates: { comments: newComments } },
+        });
+      },
       addIndividualEntry: (payload) =>
         dispatch({ type: ACTIONS.ADD_INDIVIDUAL_ENTRY, payload }),
       updateHabits: async (payload) => {
@@ -722,6 +803,59 @@ export const AppProvider = ({ children }) => {
         dispatch({
           type: ACTIONS.SET_DAILY_JOURNALS,
           payload: nextDailyJournals,
+        });
+
+        // Build individual entries (per-prompt) for the generated daily journals
+        const nonTest3IndividualEntries = state.individualEntries.filter(
+          (entry) => entry.username !== targetUsername,
+        );
+
+        const generatedIndividualEntries = generatedEntries.flatMap((entry) => {
+          const date = entry.date;
+          const items = [];
+          if (entry.highlight) {
+            items.push({
+              username: targetUsername,
+              type: "highlight",
+              content: entry.highlight,
+              date,
+            });
+          }
+          if (entry.smile) {
+            items.push({
+              username: targetUsername,
+              type: "smile",
+              content: entry.smile,
+              date,
+            });
+          }
+          if (entry.grateful) {
+            items.push({
+              username: targetUsername,
+              type: "grateful",
+              content: entry.grateful,
+              date,
+            });
+          }
+          if (entry.proudestMoment) {
+            items.push({
+              username: targetUsername,
+              type: "proudestMoment",
+              content: entry.proudestMoment,
+              date,
+            });
+          }
+          return items;
+        });
+
+        const nextIndividualEntries = [
+          ...generatedIndividualEntries,
+          ...nonTest3IndividualEntries,
+        ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        dispatch({
+          type: ACTIONS.SET_INDIVIDUAL_ENTRIES,
+          payload: nextIndividualEntries,
         });
 
         const shouldSyncUserRecord =

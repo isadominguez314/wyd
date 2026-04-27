@@ -57,6 +57,19 @@ const buildCardPreview = (fields, item) => {
   return "No details yet.";
 };
 
+const getWeeklyFieldValue = (report, key) => {
+  const legacyKeyMap = {
+    read: "reading",
+    eat: "eating",
+    play: "playing",
+    obsess: "obsessing",
+    recommend: "recommending",
+    treat: "treating",
+  };
+
+  return report[key] || report[legacyKeyMap[key]] || "";
+};
+
 const matchesAnyField = (item, fields, normalizedQuery) => {
   if (normalizedQuery.length === 0) return true;
 
@@ -70,6 +83,7 @@ const matchesAnyField = (item, fields, normalizedQuery) => {
 
 const SearchScreen = () => {
   const { state } = useAppContext();
+  const currentUsername = state.userProfile?.username;
   const [query, setQuery] = useState("");
   const [selectedFilters, setSelectedFilters] = useState([FILTERS.ALL]);
   const [selectedMoods, setSelectedMoods] = useState([]);
@@ -154,6 +168,9 @@ const SearchScreen = () => {
 
     if (hasDaily) {
       const filteredDaily = state.dailyJournals.filter((journal) => {
+        const journalUsername = journal.username || currentUsername;
+        if (journalUsername !== currentUsername) return false;
+
         const moodPass =
           selectedMoods.length === 0 || selectedMoods.includes(journal.mood);
         return moodPass && matchesAnyField(journal, dailyFields, normalized);
@@ -167,6 +184,8 @@ const SearchScreen = () => {
           date: journal.date,
           preview: buildCardPreview(dailyFields, journal),
           mood: journal.mood,
+          likes: journal.likes || [],
+          comments: journal.comments || [],
           details: [
             { label: "Highlight", value: journal.highlight },
             { label: "Smile", value: journal.smile },
@@ -178,18 +197,31 @@ const SearchScreen = () => {
     }
 
     if (hasWeekly) {
-      const filteredWeekly = state.weeklyReports.filter((report) =>
-        matchesAnyField(report, weeklyFields, normalized),
-      );
+      const filteredWeekly = state.weeklyReports.filter((report) => {
+        if (normalized.length === 0) return true;
+
+        const dateText = new Date(report.date)
+          .toLocaleDateString()
+          .toLowerCase();
+        const weeklyText = weeklyFields
+          .map((field) => getWeeklyFieldValue(report, field))
+          .join(" ")
+          .toLowerCase();
+
+        return weeklyText.includes(normalized) || dateText.includes(normalized);
+      });
 
       filteredWeekly.forEach((report, index) => {
         const weeklySummary = [
-          { label: "Reading", value: report.read },
-          { label: "Eating", value: report.eat },
-          { label: "Playing", value: report.play },
-          { label: "Obsessing", value: report.obsess },
-          { label: "Recommending", value: report.recommend },
-          { label: "Treating", value: report.treat },
+          { label: "Reading", value: getWeeklyFieldValue(report, "read") },
+          { label: "Eating", value: getWeeklyFieldValue(report, "eat") },
+          { label: "Playing", value: getWeeklyFieldValue(report, "play") },
+          { label: "Obsessing", value: getWeeklyFieldValue(report, "obsess") },
+          {
+            label: "Recommending",
+            value: getWeeklyFieldValue(report, "recommend"),
+          },
+          { label: "Treating", value: getWeeklyFieldValue(report, "treat") },
         ]
           .filter((item) => item.value && item.value.trim().length > 0)
           .map((item) => `${item.label}: ${item.value}`)
@@ -201,13 +233,15 @@ const SearchScreen = () => {
           isWeeklyReport: true,
           date: report.date,
           preview: weeklySummary || "No details yet.",
+          likes: report.likes || [],
+          comments: report.comments || [],
           details: [
-            { label: "R", value: report.read },
-            { label: "E", value: report.eat },
-            { label: "P", value: report.play },
-            { label: "O", value: report.obsess },
-            { label: "R", value: report.recommend },
-            { label: "T", value: report.treat },
+            { label: "R", value: getWeeklyFieldValue(report, "read") },
+            { label: "E", value: getWeeklyFieldValue(report, "eat") },
+            { label: "P", value: getWeeklyFieldValue(report, "play") },
+            { label: "O", value: getWeeklyFieldValue(report, "obsess") },
+            { label: "R", value: getWeeklyFieldValue(report, "recommend") },
+            { label: "T", value: getWeeklyFieldValue(report, "treat") },
           ],
         });
       });
@@ -250,6 +284,7 @@ const SearchScreen = () => {
     query,
     selectedMoods,
     showSubEntries,
+    currentUsername,
     state.dailyJournals,
     state.individualEntries,
     state.weeklyReports,
@@ -333,17 +368,14 @@ const SearchScreen = () => {
           <Text style={styles.hint}>No matches yet.</Text>
         ) : (
           results.map((result) => {
-            const expanded =
-              result.isWeeklyReport || Boolean(expandedCards[result.id]);
+            const expanded = Boolean(expandedCards[result.id]);
 
             return (
               <Pressable
                 key={result.id}
                 style={styles.resultRow}
                 onPress={() =>
-                  result.isIndividualEntry || result.isWeeklyReport
-                    ? null
-                    : toggleExpanded(result.id)
+                  result.isIndividualEntry ? null : toggleExpanded(result.id)
                 }
               >
                 <Text
@@ -363,27 +395,35 @@ const SearchScreen = () => {
                 </Text>
 
                 {result.isWeeklyReport ? (
-                  <Text style={styles.weeklyLine}>
-                    {[
-                      { label: "Reading", key: "read" },
-                      { label: "Eating", key: "eat" },
-                      { label: "Playing", key: "play" },
-                      { label: "Obsessing", key: "obsess" },
-                      { label: "Recommending", key: "recommend" },
-                      { label: "Treating", key: "treat" },
-                    ].map((item, index) => {
-                      const detail = result.details[index]?.value?.trim?.();
-                      if (!detail) return null;
+                  <>
+                    <Text style={styles.weeklyLine}>
+                      {[
+                        { label: "Reading", key: "read" },
+                        { label: "Eating", key: "eat" },
+                        { label: "Playing", key: "play" },
+                        { label: "Obsessing", key: "obsess" },
+                        { label: "Recommending", key: "recommend" },
+                        { label: "Treating", key: "treat" },
+                      ].map((item, index) => {
+                        const detail = result.details[index]?.value?.trim?.();
+                        if (!detail) return null;
 
-                      return (
-                        <Text key={`${result.id}-${item.key}`}>
-                          <Text style={styles.weeklyLabel}>{item.label}:</Text>{" "}
-                          {detail}
-                          {"  "}
-                        </Text>
-                      );
-                    })}
-                  </Text>
+                        return (
+                          <Text key={`${result.id}-${item.key}`}>
+                            <Text style={styles.weeklyLabel}>
+                              {item.label}:
+                            </Text>{" "}
+                            {detail}
+                            {"  "}
+                          </Text>
+                        );
+                      })}
+                    </Text>
+                    <Text style={styles.date}>
+                      {new Date(result.date).toLocaleDateString()}
+                      {expanded ? "  • Collapse" : "  • Expand"}
+                    </Text>
+                  </>
                 ) : (
                   <>
                     <Text style={styles.content}>{result.preview}</Text>
@@ -415,6 +455,37 @@ const SearchScreen = () => {
                         </Text>
                       ))
                   : null}
+
+                {!result.isIndividualEntry && expanded ? (
+                  <View style={styles.interactionBlock}>
+                    <Text style={styles.interactionLine}>
+                      <Text style={styles.interactionLabel}>Likes:</Text>{" "}
+                      {(result.likes || []).length}
+                      {(result.likes || []).length > 0
+                        ? ` (${result.likes.join(", ")})`
+                        : ""}
+                    </Text>
+
+                    <Text style={styles.interactionLabel}>Comments:</Text>
+                    {(result.comments || []).length === 0 ? (
+                      <Text style={styles.interactionLine}>
+                        No comments yet.
+                      </Text>
+                    ) : (
+                      (result.comments || []).map((comment, index) => (
+                        <Text
+                          key={`${result.id}-comment-${index}`}
+                          style={styles.interactionLine}
+                        >
+                          <Text style={styles.interactionCommentAuthor}>
+                            {comment.username}:
+                          </Text>{" "}
+                          {comment.text}
+                        </Text>
+                      ))
+                    )}
+                  </View>
+                ) : null}
 
                 {!result.isIndividualEntry &&
                 expanded &&
@@ -535,6 +606,22 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   weeklyLabel: {
+    fontWeight: "700",
+  },
+  interactionBlock: {
+    marginTop: theme.spacing.xs,
+    gap: 2,
+  },
+  interactionLabel: {
+    color: theme.colors.text,
+    fontWeight: "700",
+  },
+  interactionLine: {
+    color: theme.colors.text,
+    lineHeight: 18,
+  },
+  interactionCommentAuthor: {
+    color: theme.colors.text,
     fontWeight: "700",
   },
   hint: {

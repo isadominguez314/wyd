@@ -1,9 +1,10 @@
 import React from "react";
-import { View, Text, StyleSheet, Pressable } from "react-native";
+import { View, Text, StyleSheet, Pressable, Image } from "react-native";
 import ScreenContainer from "../components/ScreenContainer";
 import SectionCard from "../components/SectionCard";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
+import { moodLabels } from "../utils/moodLabels";
 
 const NavTile = ({ label, onPress, color }) => (
   <Pressable
@@ -16,29 +17,41 @@ const NavTile = ({ label, onPress, color }) => (
 
 const HomeScreen = ({ navigation }) => {
   const { state } = useAppContext();
-  const latestMood = state.dailyJournals[0]?.mood;
+  const currentUsername = state.userProfile?.username;
+  const firstName = state.userProfile?.firstName || "Friend";
+  const myDailyJournals = state.dailyJournals.filter(
+    (entry) => entry.username === currentUsername,
+  );
+  const myWeeklyReports = state.weeklyReports.filter(
+    (entry) => entry.username === currentUsername,
+  );
+  const latestMood = myDailyJournals[0]?.mood;
+
+  // Format today's date: "Monday, April 27"
+  const today = new Date();
+  const dateFormatter = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+  const formattedDate = dateFormatter.format(today);
 
   return (
     <ScreenContainer>
-      <SectionCard title="Today" subtitle="Jump into your check-in flow.">
-        <PrimaryRow
-          label="Latest mood"
-          value={latestMood ? `${latestMood}/7` : "No entry"}
+      <View style={styles.headerBlock}>
+        <Image
+          source={require("../../assets/logo.png")}
+          style={styles.logo}
+          resizeMode="contain"
         />
-        <PrimaryRow
-          label="Journal entries"
-          value={`${state.dailyJournals.length}`}
-        />
-        <PrimaryRow
-          label="Weekly reports"
-          value={`${state.weeklyReports.length}`}
-        />
-      </SectionCard>
+        <Text style={styles.greeting}>Hi, {firstName}!</Text>
+        <Text style={styles.dateText}>{formattedDate}</Text>
+      </View>
 
-      <SectionCard title="Create">
+      <SectionCard title="Create New ...">
         <View style={styles.grid}>
           <NavTile
-            label="Journal"
+            label="Daily Journal"
             color={theme.colors.pink}
             onPress={() => navigation.navigate("JournalScreen")}
           />
@@ -50,7 +63,7 @@ const HomeScreen = ({ navigation }) => {
         </View>
       </SectionCard>
 
-      <SectionCard title="Insights">
+      <SectionCard title="View Insights">
         <View style={styles.grid}>
           <NavTile
             label="Habit Chart"
@@ -63,17 +76,28 @@ const HomeScreen = ({ navigation }) => {
             onPress={() => navigation.navigate("HabitGraphScreen")}
           />
           <NavTile
-            label="Archive"
+            label="Ratings Archive"
             color={theme.colors.orange}
             onPress={() => navigation.navigate("ArchiveScreen")}
           />
           <NavTile
-            label="Search"
+            label="Journal Search"
             color={theme.colors.primary}
             onPress={() => navigation.navigate("SearchScreen")}
           />
         </View>
       </SectionCard>
+
+      <View style={styles.statsGrid}>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>Daily Journal Entries</Text>
+          <Text style={styles.statValue}>{myDailyJournals.length}</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>Weekly R.E.P.O.R.T. Entries</Text>
+          <Text style={styles.statValue}>{myWeeklyReports.length}</Text>
+        </View>
+      </View>
     </ScreenContainer>
   );
 };
@@ -117,6 +141,57 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 15,
     fontWeight: "700",
+  },
+  logo: {
+    width: 150,
+    height: 150,
+    alignSelf: "center",
+    marginBottom: theme.spacing.lg,
+  },
+  headerBlock: {
+    gap: 2,
+  },
+  greeting: {
+    fontSize: 36,
+    fontWeight: "700",
+    color: theme.colors.text,
+    textAlign: "center",
+    marginBottom: 0,
+  },
+  dateText: {
+    fontSize: 16,
+    color: theme.colors.mutedText,
+    textAlign: "center",
+    marginBottom: 0,
+  },
+  statsGrid: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    marginTop: 0,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.md,
+    paddingVertical: theme.spacing.lg,
+    paddingHorizontal: theme.spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statLabel: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+    fontWeight: "600",
+    textAlign: "center",
+    marginBottom: theme.spacing.sm,
+  },
+  statValue: {
+    color: theme.colors.text,
+    fontSize: 24,
+    fontWeight: "700",
+    textAlign: "center",
   },
 });
 

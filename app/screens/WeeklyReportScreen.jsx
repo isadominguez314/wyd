@@ -6,11 +6,26 @@ import PrimaryButton from "../components/PrimaryButton";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
 
-const fields = ["read", "eat", "play", "obsess", "recommend", "treat"];
+const fields = [
+  { label: "Reading", key: "read" },
+  { label: "Eating", key: "eat" },
+  { label: "Playing", key: "play" },
+  { label: "Obsessing Over", key: "obsess" },
+  { label: "Recommending", key: "recommend" },
+  { label: "Treating", key: "treat" },
+];
 
 const WeeklyReportScreen = ({ navigation }) => {
-  const { addWeeklyReport } = useAppContext();
+  const { state, addWeeklyReport } = useAppContext();
   const [isPublic, setIsPublic] = useState(true);
+  // Refs for keyboard navigation
+  const readRef = React.useRef(null);
+  const eatRef = React.useRef(null);
+  const playRef = React.useRef(null);
+  const obsessRef = React.useRef(null);
+  const recommendRef = React.useRef(null);
+  const treatRef = React.useRef(null);
+
   const [form, setForm] = useState({
     read: "",
     eat: "",
@@ -24,6 +39,7 @@ const WeeklyReportScreen = ({ navigation }) => {
     addWeeklyReport({
       ...form,
       public: isPublic,
+      username: state.userProfile.username,
       date: new Date().toISOString(),
     });
 
@@ -34,19 +50,41 @@ const WeeklyReportScreen = ({ navigation }) => {
   return (
     <ScreenContainer>
       <SectionCard
-        title="This week"
-        subtitle="Capture your best recs and moments in one post."
+        title="Weekly R.E.P.O.R.T."
+        subtitle="Capture everything you've been into this week."
       >
         {fields.map((field) => (
-          <View key={field} style={styles.field}>
-            <Text style={styles.label}>{field.toUpperCase()}</Text>
+          <View key={field.key} style={styles.field}>
+            <Text style={styles.label}>{field.label.toUpperCase()}</Text>
             <TextInput
               style={styles.input}
-              value={form[field]}
+              value={form[field.key]}
               onChangeText={(text) =>
-                setForm((prev) => ({ ...prev, [field]: text }))
+                setForm((prev) => ({ ...prev, [field.key]: text }))
               }
-              placeholder={`What did you ${field} this week?`}
+              ref={
+                field.key === "read"
+                  ? readRef
+                  : field.key === "eat"
+                    ? eatRef
+                    : field.key === "play"
+                      ? playRef
+                      : field.key === "obsess"
+                        ? obsessRef
+                        : field.key === "recommend"
+                          ? recommendRef
+                          : treatRef
+              }
+              returnKeyType={field.key === "treat" ? "done" : "next"}
+              blurOnSubmit={field.key === "treat"}
+              onSubmitEditing={() => {
+                if (field.key === "read") eatRef.current?.focus();
+                else if (field.key === "eat") playRef.current?.focus();
+                else if (field.key === "play") obsessRef.current?.focus();
+                else if (field.key === "obsess") recommendRef.current?.focus();
+                else if (field.key === "recommend") treatRef.current?.focus();
+              }}
+              placeholder={`What have you been ${field.label.toLowerCase()} this week?`}
             />
           </View>
         ))}
@@ -55,11 +93,23 @@ const WeeklyReportScreen = ({ navigation }) => {
       <SectionCard title="Post settings">
         <View style={styles.switchRow}>
           <Text style={styles.label}>Share to friends feed</Text>
-          <Switch value={isPublic} onValueChange={setIsPublic} />
+          <Switch
+            value={isPublic}
+            onValueChange={setIsPublic}
+            trackColor={{
+              false: theme.colors.border,
+              true: theme.colors.primary,
+            }}
+            thumbColor={isPublic ? "#FFFFFF" : theme.colors.text}
+          />
         </View>
       </SectionCard>
 
-      <PrimaryButton label="Save Weekly Report" onPress={submit} tone="green" />
+      <PrimaryButton
+        label="Save Weekly Report"
+        onPress={submit}
+        tone="yellow"
+      />
     </ScreenContainer>
   );
 };

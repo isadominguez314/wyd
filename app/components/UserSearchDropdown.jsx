@@ -7,8 +7,13 @@ const UserSearchDropdown = ({
   results,
   onSelect,
   emptyText = "No users found.",
+  plainEmpty = false,
 }) => {
   if (!visible) return null;
+
+  if (results.length === 0 && plainEmpty) {
+    return <Text style={styles.plainEmpty}>{emptyText}</Text>;
+  }
 
   return (
     <View style={styles.dropdown}>
@@ -60,6 +65,10 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedText,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
+  },
+  plainEmpty: {
+    color: theme.colors.mutedText,
+    marginTop: theme.spacing.xs,
   },
 });
 

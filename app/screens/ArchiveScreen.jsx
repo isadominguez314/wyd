@@ -164,7 +164,7 @@ const ArchiveScreen = () => {
   return (
     <ScreenContainer>
       <SectionCard
-        title="Mood Archive"
+        title="Daily Archive"
         subtitle="Tap any day to view that journal entry."
       >
         <View style={styles.rangeRow}>
@@ -182,6 +182,20 @@ const ArchiveScreen = () => {
             >
               <Text style={styles.rangeChipText}>{rangeLabels[key]}</Text>
             </Pressable>
+          ))}
+        </View>
+
+        <View style={styles.legendRow}>
+          {moodScale.map((mood) => (
+            <View key={mood} style={styles.legendItem}>
+              <View
+                style={[
+                  styles.legendDot,
+                  { backgroundColor: theme.moodColors[mood] },
+                ]}
+              />
+              <Text style={styles.legendText}>{moodLabels[mood] || mood}</Text>
+            </View>
           ))}
         </View>
 
@@ -251,22 +265,6 @@ const ArchiveScreen = () => {
         )}
       </SectionCard>
 
-      <SectionCard title="Legend">
-        <View style={styles.legendRow}>
-          {moodScale.map((mood) => (
-            <View key={mood} style={styles.legendItem}>
-              <View
-                style={[
-                  styles.legendDot,
-                  { backgroundColor: theme.moodColors[mood] },
-                ]}
-              />
-              <Text style={styles.legendText}>{moodLabels[mood] || mood}</Text>
-            </View>
-          ))}
-        </View>
-      </SectionCard>
-
       <Modal
         visible={Boolean(selectedEntry)}
         transparent
@@ -279,17 +277,36 @@ const ArchiveScreen = () => {
               <>
                 <Text style={styles.modalTitle}>Daily Journal</Text>
                 <Text style={styles.modalMeta}>
-                  {new Date(selectedEntry.date).toLocaleDateString()} · Mood{" "}
-                  {selectedEntry.mood}/7
+                  {new Date(selectedEntry.date).toLocaleDateString()} · Rating:{" "}
+                  {moodLabels[selectedEntry.mood] || selectedEntry.mood}
                 </Text>
-                <Text style={styles.modalBody}>{selectedEntry.highlight}</Text>
-                <Text style={styles.modalBody}>{selectedEntry.smile}</Text>
-                <Text style={styles.modalBody}>{selectedEntry.grateful}</Text>
+                {selectedEntry.highlight ? (
+                  <Text style={styles.modalBody}>
+                    <Text style={styles.modalLabel}>Highlight: </Text>
+                    {selectedEntry.highlight}
+                  </Text>
+                ) : null}
+                {selectedEntry.smile ? (
+                  <Text style={styles.modalBody}>
+                    <Text style={styles.modalLabel}>Smile: </Text>
+                    {selectedEntry.smile}
+                  </Text>
+                ) : null}
+                {selectedEntry.grateful ? (
+                  <Text style={styles.modalBody}>
+                    <Text style={styles.modalLabel}>Gratitude: </Text>
+                    {selectedEntry.grateful}
+                  </Text>
+                ) : null}
+                {selectedEntry.proudestMoment ? (
+                  <Text style={styles.modalBody}>
+                    <Text style={styles.modalLabel}>Proudest Moment: </Text>
+                    {selectedEntry.proudestMoment}
+                  </Text>
+                ) : null}
                 <Text style={styles.modalBody}>
-                  {selectedEntry.proudestMoment}
-                </Text>
-                <Text style={styles.modalMeta}>
-                  Habits: {(selectedEntry.habits || []).join(", ") || "None"}
+                  <Text style={styles.modalLabel}>Habits: </Text>
+                  {(selectedEntry.habits || []).join(", ") || "None"}
                 </Text>
               </>
             ) : null}
@@ -382,6 +399,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
   },
   legendItem: {
     flexDirection: "row",
@@ -421,6 +439,10 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 12,
     marginBottom: theme.spacing.xs,
+  },
+  modalLabel: {
+    fontWeight: "700",
+    color: theme.colors.text,
   },
   modalBody: {
     color: theme.colors.text,

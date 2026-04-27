@@ -7,7 +7,9 @@ import {
   Pressable,
   Switch,
   Alert,
+  Modal,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import ScreenContainer from "../components/ScreenContainer";
 import SectionCard from "../components/SectionCard";
 import PrimaryButton from "../components/PrimaryButton";
@@ -16,17 +18,63 @@ import { useAppContext } from "../context/AppContext";
 import { moodLabels, moodOptions } from "../utils/moodLabels";
 
 const journalPrompts = [
-  { key: "highlight", label: "Highlight" },
-  { key: "smile", label: "Made me smile" },
-  { key: "grateful", label: "Grateful for" },
-  { key: "proudestMoment", label: "Proudest moment" },
+  { key: "highlight", label: "What was the highlight of your day?" },
+  { key: "smile", label: "What made you smile today?" },
+  { key: "grateful", label: "What are you grateful for?" },
+  { key: "proudestMoment", label: "What was your proudest moment today?" },
 ];
+// Helper function to render label with highlighted keywords
+const renderHighlightedLabel = (text) => {
+  const keywords = ["highlight", "smile", "grateful", "proudest moment"];
+  const parts = [];
+  let lastIndex = 0;
+
+  const lowerText = text.toLowerCase();
+  const keywordMatches = [];
+
+  keywords.forEach((keyword) => {
+    let index = lowerText.indexOf(keyword);
+    while (index !== -1) {
+      keywordMatches.push({ index, length: keyword.length });
+      index = lowerText.indexOf(keyword, index + 1);
+    }
+  });
+
+  // Sort matches by index
+  keywordMatches.sort((a, b) => a.index - b.index);
+
+  keywordMatches.forEach((match) => {
+    if (match.index > lastIndex) {
+      parts.push({
+        text: text.substring(lastIndex, match.index),
+        highlight: false,
+      });
+    }
+    parts.push({
+      text: text.substring(match.index, match.index + match.length),
+      highlight: true,
+    });
+    lastIndex = match.index + match.length;
+  });
+
+  if (lastIndex < text.length) {
+    parts.push({ text: text.substring(lastIndex), highlight: false });
+  }
+
+  return parts;
+};
 
 const JournalScreen = ({ navigation }) => {
   const { state, addDailyJournal, addIndividualEntry } = useAppContext();
-  const [mood, setMood] = useState(4);
+  const [mood, setMood] = useState(null);
   const [isPublic, setIsPublic] = useState(true);
   const moodScale = moodOptions || [1, 2, 3, 4, 5, 6, 7];
+  // Refs for keyboard navigation
+  const highlightRef = React.useRef(null);
+  const smileRef = React.useRef(null);
+  const gratefulRef = React.useRef(null);
+  const proudestMomentRef = React.useRef(null);
+
   const [form, setForm] = useState({
     highlight: "",
     smile: "",
@@ -34,10 +82,20 @@ const JournalScreen = ({ navigation }) => {
     proudestMoment: "",
   });
   const [selectedHabits, setSelectedHabits] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   const habits = state.userProfile.habitsList || [];
   const habitColors = state.userProfile.habitColors || {};
-  const today = useMemo(() => new Date().toISOString(), []);
+
+  const formatDate = (date) => {
+    return date.toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  };
 
   const toggleHabit = (habit) => {
     setSelectedHabits((prev) =>
@@ -48,23 +106,32 @@ const JournalScreen = ({ navigation }) => {
   };
 
   const submit = () => {
+    const dateString = selectedDate.toISOString();
+    // Trim text fields to remove accidental whitespace/newlines
+    const trimmedForm = {
+      highlight: form.highlight?.trim() || "",
+      smile: form.smile?.trim() || "",
+      grateful: form.grateful?.trim() || "",
+      proudestMoment: form.proudestMoment?.trim() || "",
+    };
+
     const payload = {
-      mood,
-      ...form,
+      mood: mood ?? null,
+      ...trimmedForm,
       habits: selectedHabits,
       public: isPublic,
-      date: today,
+      date: dateString,
     };
 
     addDailyJournal(payload);
 
     journalPrompts.forEach((prompt) => {
-      const content = form[prompt.key]?.trim();
+      const content = trimmedForm[prompt.key]?.trim();
       if (!content) return;
       addIndividualEntry({
         type: prompt.key,
         content,
-        date: today,
+        date: dateString,
       });
     });
 
@@ -74,7 +141,43 @@ const JournalScreen = ({ navigation }) => {
 
   return (
     <ScreenContainer>
-      <SectionCard title="Mood" subtitle="How does today feel overall?">
+      <SectionCard title="Date" subtitle="Which day are you journaling about?">
+        <Pressable
+          style={styles.dateButton}
+          onPress={() => setShowDatePicker(true)}
+        >
+          <Text style={styles.dateButtonText}>{formatDate(selectedDate)}</Text>
+        </Pressable>
+      </SectionCard>
+
+      {showDatePicker && (
+        <Modal visible={showDatePicker} transparent animationType="slide">
+          <View style={styles.datePickerModalOverlay}>
+            <View style={styles.datePickerContainer}>
+              <View style={styles.datePickerHeader}>
+                <Pressable onPress={() => setShowDatePicker(false)}>
+                  <Text style={styles.datePickerDone}>Done</Text>
+                </Pressable>
+              </View>
+              <DateTimePicker
+                value={selectedDate}
+                mode="date"
+                display="spinner"
+                onChange={(event, date) => {
+                  if (date) {
+                    setSelectedDate(date);
+                  }
+                }}
+                maximumDate={new Date()}
+                textColor={theme.colors.text}
+                accentColor={theme.colors.text}
+              />
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      <SectionCard title="Mood" subtitle="How was your day overall?">
         <View style={styles.moodRow}>
           {moodScale.map((value) => (
             <Pressable
@@ -86,7 +189,8 @@ const JournalScreen = ({ navigation }) => {
                   backgroundColor: theme.moodColors[value],
                   borderWidth: mood === value ? 2 : 1,
                   borderColor:
-                    mood === value ? theme.colors.text : "transparent",
+                    mood === value ? theme.colors.text : theme.colors.border,
+                  opacity: mood === value ? 1 : 0.6,
                 },
               ]}
             >
@@ -96,24 +200,61 @@ const JournalScreen = ({ navigation }) => {
         </View>
       </SectionCard>
 
-      <SectionCard title="Journal prompts">
+      <SectionCard title="Journal Prompts">
         {journalPrompts.map((prompt) => (
           <View key={prompt.key} style={styles.inputBlock}>
-            <Text style={styles.label}>{prompt.label}</Text>
+            <Text style={styles.label}>
+              {renderHighlightedLabel(prompt.label).map((part, index) => (
+                <Text
+                  key={index}
+                  style={
+                    part.highlight
+                      ? styles.highlightedKeyword
+                      : styles.normalText
+                  }
+                >
+                  {part.text}
+                </Text>
+              ))}
+            </Text>
             <TextInput
               style={styles.input}
               value={form[prompt.key]}
               onChangeText={(text) =>
                 setForm((prev) => ({ ...prev, [prompt.key]: text }))
               }
-              placeholder={`Write your ${prompt.label.toLowerCase()}...`}
+              ref={
+                prompt.key === "highlight"
+                  ? highlightRef
+                  : prompt.key === "smile"
+                    ? smileRef
+                    : prompt.key === "grateful"
+                      ? gratefulRef
+                      : proudestMomentRef
+              }
+              returnKeyType={prompt.key === "proudestMoment" ? "done" : "next"}
+              blurOnSubmit={prompt.key === "proudestMoment"}
+              onSubmitEditing={() => {
+                if (prompt.key === "highlight") smileRef.current?.focus();
+                else if (prompt.key === "smile") gratefulRef.current?.focus();
+                else if (prompt.key === "grateful")
+                  proudestMomentRef.current?.focus();
+              }}
+              onKeyPress={({ nativeEvent }) => {
+                if (nativeEvent.key === "Enter") {
+                  if (prompt.key === "highlight") smileRef.current?.focus();
+                  else if (prompt.key === "smile") gratefulRef.current?.focus();
+                  else if (prompt.key === "grateful")
+                    proudestMomentRef.current?.focus();
+                }
+              }}
               multiline
             />
           </View>
         ))}
       </SectionCard>
 
-      <SectionCard title="Habits done today">
+      <SectionCard title="Daily Habits Completed">
         <View style={styles.moodRow}>
           {habits.length === 0 ? (
             <Text style={styles.hint}>
@@ -146,19 +287,64 @@ const JournalScreen = ({ navigation }) => {
         </View>
       </SectionCard>
 
-      <SectionCard title="Post settings">
+      <SectionCard title="Post Privacy Settings">
         <View style={styles.switchRow}>
           <Text style={styles.label}>Share to friends feed</Text>
-          <Switch value={isPublic} onValueChange={setIsPublic} />
+          <Switch
+            value={isPublic}
+            onValueChange={setIsPublic}
+            trackColor={{
+              false: theme.colors.border,
+              true: theme.colors.primary,
+            }}
+            thumbColor={isPublic ? "#FFFFFF" : theme.colors.text}
+          />
         </View>
       </SectionCard>
 
-      <PrimaryButton label="Save Journal" onPress={submit} tone="green" />
+      <PrimaryButton label="Save Journal" onPress={submit} tone="yellow" />
     </ScreenContainer>
   );
 };
 
 const styles = StyleSheet.create({
+  datePickerModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  datePickerContainer: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: theme.radius.lg,
+    borderTopRightRadius: theme.radius.lg,
+    paddingBottom: theme.spacing.lg,
+  },
+  datePickerHeader: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  datePickerDone: {
+    color: "#e8c500",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+  dateButton: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: theme.spacing.md,
+    alignItems: "center",
+  },
+  dateButtonText: {
+    color: theme.colors.text,
+    fontWeight: "600",
+    fontSize: 16,
+  },
   moodRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -183,6 +369,13 @@ const styles = StyleSheet.create({
   label: {
     color: theme.colors.text,
     fontWeight: "600",
+  },
+  highlightedKeyword: {
+    color: "#e8c500",
+    fontWeight: "700",
+  },
+  normalText: {
+    color: theme.colors.text,
   },
   input: {
     backgroundColor: "#FFFFFF",
@@ -213,5 +406,4 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
 });
-
 export default JournalScreen;
