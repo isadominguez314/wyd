@@ -13,8 +13,7 @@ import SectionCard from "../components/SectionCard";
 import PrimaryButton from "../components/PrimaryButton";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
-
-const moodOptions = [1, 2, 3, 4, 5, 6, 7];
+import { moodLabels, moodOptions } from "../utils/moodLabels";
 
 const journalPrompts = [
   { key: "highlight", label: "Highlight" },
@@ -27,6 +26,7 @@ const JournalScreen = ({ navigation }) => {
   const { state, addDailyJournal, addIndividualEntry } = useAppContext();
   const [mood, setMood] = useState(4);
   const [isPublic, setIsPublic] = useState(true);
+  const moodScale = moodOptions || [1, 2, 3, 4, 5, 6, 7];
   const [form, setForm] = useState({
     highlight: "",
     smile: "",
@@ -76,7 +76,7 @@ const JournalScreen = ({ navigation }) => {
     <ScreenContainer>
       <SectionCard title="Mood" subtitle="How does today feel overall?">
         <View style={styles.moodRow}>
-          {moodOptions.map((value) => (
+          {moodScale.map((value) => (
             <Pressable
               key={value}
               onPress={() => setMood(value)}
@@ -84,11 +84,13 @@ const JournalScreen = ({ navigation }) => {
                 styles.moodChip,
                 {
                   backgroundColor: theme.moodColors[value],
-                  borderWidth: mood === value ? 2 : 0,
+                  borderWidth: mood === value ? 2 : 1,
+                  borderColor:
+                    mood === value ? theme.colors.text : "transparent",
                 },
               ]}
             >
-              <Text style={styles.moodText}>{value}</Text>
+              <Text style={styles.moodText}>{moodLabels[value] || value}</Text>
             </Pressable>
           ))}
         </View>
@@ -163,16 +165,17 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   moodChip: {
-    width: 38,
-    height: 38,
+    minHeight: 34,
     borderRadius: theme.radius.pill,
-    borderColor: theme.colors.text,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
     alignItems: "center",
     justifyContent: "center",
   },
   moodText: {
-    color: "#FFFFFF",
+    color: theme.colors.text,
     fontWeight: "700",
+    fontSize: 12,
   },
   inputBlock: {
     gap: theme.spacing.xs,
