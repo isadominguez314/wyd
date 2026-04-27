@@ -1,0 +1,46 @@
+const theme = {
+  colors: {
+    primary: "#FFEE8C",
+    pink: "#FFD6E0",
+    green: "#C3F0CA",
+    blue: "#BDE0FE",
+    purple: "#E8C5F5",
+    orange: "#FFD9A0",
+    background: "#FFFDF0",
+    text: "#2E2A2A",
+    mutedText: "#6E6767",
+    card: "#FFFFFF",
+    border: "#F0EAD2",
+    danger: "#A4161A",
+    warning: "#D95D39",
+    neutral: "#C8B6B6",
+    success: "#5FAD56",
+    excellent: "#3F37C9",
+  },
+  moodColors: {
+    1: "#7F1D1D",
+    2: "#B42318",
+    3: "#D95D39",
+    4: "#E9C46A",
+    5: "#8AC926",
+    6: "#4CC9F0",
+    7: "#3F37C9",
+  },
+  spacing: {
+    xs: 4,
+    sm: 8,
+    md: 12,
+    lg: 16,
+    xl: 24,
+    xxl: 32,
+  },
+  radius: {
+    sm: 8,
+    md: 12,
+    lg: 18,
+    xl: 24,
+    pill: 999,
+  },
+};
+
+export default theme;
