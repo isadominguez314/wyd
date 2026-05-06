@@ -9,12 +9,16 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import ScreenContainer from "../components/ScreenContainer";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
 import { moodLabels } from "../utils/moodLabels";
+import { formatLocalDate } from "../utils/dateUtils";
+import * as DB from "../storage/supabaseService";
+import { useNavigation } from "@react-navigation/native";
 
 const weeklyFieldMap = [
   { label: "Reading", key: "read" },
@@ -25,9 +29,9 @@ const weeklyFieldMap = [
   { label: "Treating", key: "treat" },
 ];
 
-const interactionSummary = (likes = [], comments = []) => ({
-  likeCount: likes.length,
-  commentCount: comments.length,
+const interactionSummary = (post = {}) => ({
+  likeCount: post.likeCount ?? (post.likes || []).length,
+  commentCount: post.commentCount ?? (post.comments || []).length,
 });
 
 const getWeeklyFieldValue = (report, key) => {
@@ -49,12 +53,11 @@ const DailyJournalCard = ({
   isLiked,
   onToggleLike,
   onCommentPress,
+  onEditPress,
+  onDeletePress,
 }) => {
   const moodColor = theme.moodColors[post.mood] || theme.colors.border;
-  const { likeCount, commentCount } = interactionSummary(
-    post.likes,
-    post.comments,
-  );
+  const { likeCount, commentCount } = interactionSummary(post);
 
   return (
     <View style={[styles.card, { borderColor: moodColor, borderWidth: 2 }]}>
@@ -63,11 +66,36 @@ const DailyJournalCard = ({
           <Text style={styles.cardUsername}>{post.author}</Text>
           {"'s Daily Journal"}
         </Text>
-        {isOwnPost ? <Text style={styles.ownPostBadge}>Your post</Text> : null}
+        {isOwnPost ? (
+          <View style={styles.headerActions}>
+            <Pressable
+              style={styles.iconAction}
+              onPress={onEditPress}
+              hitSlop={8}
+            >
+              <MaterialCommunityIcons
+                name="pencil-outline"
+                size={18}
+                color={theme.colors.mutedText}
+              />
+            </Pressable>
+            <Pressable
+              style={styles.iconAction}
+              onPress={onDeletePress}
+              hitSlop={8}
+            >
+              <MaterialCommunityIcons
+                name="trash-can-outline"
+                size={18}
+                color={theme.colors.mutedText}
+              />
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       <Text style={styles.cardMeta}>
-        {new Date(post.date).toLocaleDateString()} · Rating:{" "}
+        {formatLocalDate(post.date)} · Rating:{" "}
         {moodLabels[post.mood] || post.mood}
       </Text>
 
@@ -129,15 +157,14 @@ const WeeklyReportCard = ({
   isLiked,
   onToggleLike,
   onCommentPress,
+  onEditPress,
+  onDeletePress,
 }) => {
   const filledFields = weeklyFieldMap.filter((field) => {
     const value = getWeeklyFieldValue(post, field.key);
     return value && value.trim().length > 0;
   });
-  const { likeCount, commentCount } = interactionSummary(
-    post.likes,
-    post.comments,
-  );
+  const { likeCount, commentCount } = interactionSummary(post);
 
   return (
     <View
@@ -151,12 +178,35 @@ const WeeklyReportCard = ({
           <Text style={styles.cardUsername}>{post.author}</Text>
           {"'s Weekly R.E.P.O.R.T."}
         </Text>
-        {isOwnPost ? <Text style={styles.ownPostBadge}>Your post</Text> : null}
+        {isOwnPost ? (
+          <View style={styles.headerActions}>
+            <Pressable
+              style={styles.iconAction}
+              onPress={onEditPress}
+              hitSlop={8}
+            >
+              <MaterialCommunityIcons
+                name="pencil-outline"
+                size={18}
+                color={theme.colors.mutedText}
+              />
+            </Pressable>
+            <Pressable
+              style={styles.iconAction}
+              onPress={onDeletePress}
+              hitSlop={8}
+            >
+              <MaterialCommunityIcons
+                name="trash-can-outline"
+                size={18}
+                color={theme.colors.mutedText}
+              />
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
-      <Text style={styles.cardMeta}>
-        {new Date(post.date).toLocaleDateString()}
-      </Text>
+      <Text style={styles.cardMeta}>{formatLocalDate(post.date)}</Text>
 
       {filledFields.length === 0 ? (
         <Text style={styles.cardHint}>No details shared.</Text>
@@ -199,6 +249,7 @@ const WeeklyReportCard = ({
 };
 
 const FeedScreen = () => {
+  const navigation = useNavigation();
   const {
     state,
     auth,
@@ -206,6 +257,8 @@ const FeedScreen = () => {
     toggleLikeOnWeeklyReport,
     addCommentOnDailyJournal,
     addCommentOnWeeklyReport,
+    deleteDailyJournal,
+    deleteWeeklyReport,
   } = useAppContext();
 
   const [searchText, setSearchText] = useState("");
@@ -219,46 +272,56 @@ const FeedScreen = () => {
   const [commentingPostId, setCommentingPostId] = useState(null);
   const [commentingPostKind, setCommentingPostKind] = useState(null);
   const [commentText, setCommentText] = useState("");
+  const [commentThread, setCommentThread] = useState([]);
+  const [isLoadingComments, setIsLoadingComments] = useState(false);
 
-  const currentUsername = auth.currentUsername || state.userProfile.username;
+  const currentUsername =
+    state.userProfile.handle ||
+    state.userProfile.username ||
+    auth.currentUsername;
+  const currentUserId = auth.user?.id || state.userProfile.id;
   const friendSet = new Set([
     currentUsername,
     ...(state.userProfile.friendsList || []),
   ]);
 
-  const posts = useMemo(() => {
+  const legacyPosts = useMemo(() => {
     const dailyPosts = state.dailyJournals
       .filter((entry) => entry.public)
       .map((entry, index) => ({
-        id: `daily-${entry.date}-${index}`,
+        id: entry.id || `daily-${entry.entry_date || entry.date}-${index}`,
         kind: "daily",
-        author: entry.username || currentUsername || "Friend",
+        author: entry.username || entry.handle || currentUsername || "Friend",
         mood: entry.mood,
         highlight: entry.highlight,
         smile: entry.smile,
         grateful: entry.grateful,
         proudestMoment: entry.proudestMoment,
         habits: entry.habits,
-        date: entry.date,
+        date: entry.entry_date || entry.date,
         likes: entry.likes || [],
         comments: entry.comments || [],
+        likeCount: entry.likeCount ?? (entry.likes || []).length,
+        commentCount: entry.commentCount ?? (entry.comments || []).length,
       }));
 
     const weeklyPosts = state.weeklyReports
       .filter((entry) => entry.public)
       .map((entry, index) => ({
-        id: `weekly-${entry.date}-${index}`,
+        id: entry.id || `weekly-${entry.week_start || entry.date}-${index}`,
         kind: "weekly",
-        author: entry.username || currentUsername || "Friend",
+        author: entry.username || entry.handle || currentUsername || "Friend",
         read: getWeeklyFieldValue(entry, "read"),
         eat: getWeeklyFieldValue(entry, "eat"),
         play: getWeeklyFieldValue(entry, "play"),
         obsess: getWeeklyFieldValue(entry, "obsess"),
         recommend: getWeeklyFieldValue(entry, "recommend"),
         treat: getWeeklyFieldValue(entry, "treat"),
-        date: entry.date,
+        date: entry.week_start || entry.date,
         likes: entry.likes || [],
         comments: entry.comments || [],
+        likeCount: entry.likeCount ?? (entry.likes || []).length,
+        commentCount: entry.commentCount ?? (entry.comments || []).length,
       }));
 
     return [...dailyPosts, ...weeklyPosts]
@@ -271,6 +334,8 @@ const FeedScreen = () => {
     state.userProfile.friendsList,
     state.weeklyReports,
   ]);
+
+  const posts = state.feedPosts?.length ? state.feedPosts : legacyPosts;
 
   const uniqueFriends = useMemo(() => {
     const friendSet = new Set(posts.map((post) => post.author));
@@ -326,20 +391,74 @@ const FeedScreen = () => {
     [posts, commentingPostId],
   );
 
+  const loadCommentsForPost = async (post) => {
+    if (!post) return [];
+
+    if (post.kind === "daily") {
+      return DB.getDailyJournalComments(post.id || post.date);
+    }
+
+    return DB.getWeeklyReportComments(post.id || post.date);
+  };
+
   const closeComments = () => {
     setShowCommentModal(false);
     setCommentingPostId(null);
     setCommentingPostKind(null);
     setCommentText("");
+    setCommentThread([]);
   };
 
   const toggleLike = (post) => {
     if (post.kind === "daily") {
-      toggleLikeOnDailyJournal(post.date, currentUsername);
+      toggleLikeOnDailyJournal(post.id || post.date, currentUserId);
       return;
     }
 
-    toggleLikeOnWeeklyReport(post.date, currentUsername);
+    toggleLikeOnWeeklyReport(post.id || post.date, currentUserId);
+  };
+
+  const editPost = (post) => {
+    if (post.kind === "daily") {
+      navigation.navigate("HomeTab", {
+        screen: "JournalScreen",
+        params: { journal: post },
+      });
+      return;
+    }
+
+    navigation.navigate("HomeTab", {
+      screen: "WeeklyReportScreen",
+      params: { report: post },
+    });
+  };
+
+  const deletePost = (post) => {
+    const message =
+      post.kind === "daily"
+        ? "Delete this daily journal? This cannot be undone."
+        : "Delete this weekly report? This cannot be undone.";
+
+    Alert.alert("Delete entry?", message, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          const result =
+            post.kind === "daily"
+              ? await deleteDailyJournal(post.id)
+              : await deleteWeeklyReport(post.id);
+
+          if (!result?.ok) {
+            Alert.alert(
+              "Delete failed",
+              result?.error || "Could not delete the entry.",
+            );
+          }
+        },
+      },
+    ]);
   };
 
   const toggleFriendFilter = (friend) => {
@@ -356,22 +475,41 @@ const FeedScreen = () => {
     });
   };
 
-  const openCommentModal = (post) => {
+  const openCommentModal = async (post) => {
     setCommentingPostId(post.id);
     setCommentingPostKind(post.kind);
     setShowCommentModal(true);
+    setIsLoadingComments(true);
+
+    try {
+      const comments = await loadCommentsForPost(post);
+      setCommentThread(comments || []);
+    } catch (error) {
+      console.error("Error loading comments:", error);
+      setCommentThread([]);
+    } finally {
+      setIsLoadingComments(false);
+    }
   };
 
-  const addComment = () => {
+  const addComment = async () => {
     const text = commentText.trim();
     if (!text || !selectedPost) return;
 
     if (commentingPostKind === "daily") {
-      addCommentOnDailyJournal(selectedPost.date, currentUsername, text);
+      await addCommentOnDailyJournal(
+        selectedPost.id || selectedPost.date,
+        text,
+      );
     } else {
-      addCommentOnWeeklyReport(selectedPost.date, currentUsername, text);
+      await addCommentOnWeeklyReport(
+        selectedPost.id || selectedPost.date,
+        text,
+      );
     }
 
+    const comments = await loadCommentsForPost(selectedPost);
+    setCommentThread(comments || []);
     setCommentText("");
   };
 
@@ -506,19 +644,29 @@ const FeedScreen = () => {
             <DailyJournalCard
               key={post.id}
               post={post}
-              isOwnPost={post.author === currentUsername}
-              isLiked={(post.likes || []).includes(currentUsername)}
+              isOwnPost={
+                post.author === currentUsername ||
+                post.author === state.userProfile.handle
+              }
+              isLiked={Boolean(post.likedByCurrentUser)}
               onToggleLike={() => toggleLike(post)}
               onCommentPress={() => openCommentModal(post)}
+              onEditPress={() => editPost(post)}
+              onDeletePress={() => deletePost(post)}
             />
           ) : (
             <WeeklyReportCard
               key={post.id}
               post={post}
-              isOwnPost={post.author === currentUsername}
-              isLiked={(post.likes || []).includes(currentUsername)}
+              isOwnPost={
+                post.author === currentUsername ||
+                post.author === state.userProfile.handle
+              }
+              isLiked={Boolean(post.likedByCurrentUser)}
               onToggleLike={() => toggleLike(post)}
               onCommentPress={() => openCommentModal(post)}
+              onEditPress={() => editPost(post)}
+              onDeletePress={() => deletePost(post)}
             />
           ),
         )
@@ -548,14 +696,20 @@ const FeedScreen = () => {
               contentContainerStyle={styles.commentListContent}
               keyboardShouldPersistTaps="handled"
             >
-              {selectedPost?.comments?.length ? (
-                selectedPost.comments.map((comment, index) => (
+              {isLoadingComments ? (
+                <Text style={styles.commentEmpty}>Loading comments...</Text>
+              ) : commentThread.length ? (
+                commentThread.map((comment, index) => (
                   <View
-                    key={`${comment.username}-${comment.date}-${index}`}
+                    key={`${comment.id || comment.created_at || index}`}
                     style={styles.commentBubble}
                   >
-                    <Text style={styles.commentAuthor}>{comment.username}</Text>
-                    <Text style={styles.commentBody}>{comment.text}</Text>
+                    <Text style={styles.commentAuthor}>
+                      {comment.profiles?.handle || comment.username || "Friend"}
+                    </Text>
+                    <Text style={styles.commentBody}>
+                      {comment.comment_text || comment.text || ""}
+                    </Text>
                   </View>
                 ))
               ) : (
@@ -699,16 +853,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: theme.spacing.sm,
   },
-  ownPostBadge: {
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: theme.colors.primary,
-    borderRadius: theme.radius.pill,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 2,
-    fontSize: 11,
-    color: theme.colors.text,
-    fontWeight: "700",
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+  },
+  iconAction: {
+    padding: 4,
   },
   cardActions: {
     flexDirection: "row",
@@ -717,6 +868,36 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing.md,
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
+  },
+  managementActions: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    justifyContent: "flex-end",
+    marginTop: theme.spacing.sm,
+  },
+  managementButton: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: "#FFFFFF",
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  managementButtonText: {
+    color: theme.colors.text,
+    fontWeight: "700",
+  },
+  managementButtonDanger: {
+    borderWidth: 1,
+    borderColor: "#F0B4B4",
+    backgroundColor: "#FFF5F5",
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  managementButtonDangerText: {
+    color: "#A33A3A",
+    fontWeight: "700",
   },
   actionButton: {
     flexDirection: "row",

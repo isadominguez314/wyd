@@ -22,14 +22,16 @@ const UserSearchDropdown = ({
       ) : (
         results.map((user) => (
           <Pressable
-            key={user.username}
+            key={user.handle || user.username}
             style={styles.item}
             onPress={() => onSelect(user)}
           >
             <Text style={styles.primary}>
               {user.firstName} {user.lastName}
             </Text>
-            <Text style={styles.secondary}>@{user.username}</Text>
+            <Text style={styles.secondary}>
+              @{user.handle || user.username}
+            </Text>
           </Pressable>
         ))
       )}

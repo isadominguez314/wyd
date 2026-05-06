@@ -1,10 +1,17 @@
 import React, { useMemo, useState } from "react";
-import { View, Text, StyleSheet, Pressable, Modal } from "react-native";
+import { View, Text, StyleSheet, Pressable, Modal, Alert } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
 import ScreenContainer from "../components/ScreenContainer";
 import SectionCard from "../components/SectionCard";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
 import { moodLabels, moodOptions } from "../utils/moodLabels";
+import {
+  formatLocalDate,
+  parseLocalDate,
+  toLocalDateKey,
+} from "../utils/dateUtils";
 
 const ranges = {
   "1mo": 30,
@@ -22,14 +29,6 @@ const rangeLabels = {
 
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-const toLocalDateKey = (dateInput) => {
-  const date = new Date(dateInput);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
-
 const chunk = (items, size) => {
   const groups = [];
   for (let idx = 0; idx < items.length; idx += size) {
@@ -44,11 +43,52 @@ const formatMonthLabel = (date, includeYear) =>
     : date.toLocaleDateString(undefined, { month: "short" });
 
 const ArchiveScreen = () => {
-  const { state } = useAppContext();
+  const navigation = useNavigation();
+  const { state, deleteDailyJournal } = useAppContext();
   const currentUsername = state.userProfile.username;
   const [range, setRange] = useState("3mo");
   const [selectedEntry, setSelectedEntry] = useState(null);
   const moodScale = moodOptions || [1, 2, 3, 4, 5, 6, 7];
+
+  const editEntry = () => {
+    if (!selectedEntry) return;
+
+    const journalToEdit = selectedEntry;
+    setSelectedEntry(null);
+    requestAnimationFrame(() => {
+      navigation.navigate("JournalScreen", {
+        journal: journalToEdit,
+      });
+    });
+  };
+
+  const deleteEntry = () => {
+    if (!selectedEntry) return;
+
+    Alert.alert(
+      "Delete journal?",
+      "Delete this daily journal? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const result = await deleteDailyJournal(selectedEntry.id);
+            if (!result?.ok) {
+              Alert.alert(
+                "Delete failed",
+                result?.error || "Could not delete the journal.",
+              );
+              return;
+            }
+
+            setSelectedEntry(null);
+          },
+        },
+      ],
+    );
+  };
 
   const journalsForUser = useMemo(
     () =>
@@ -63,7 +103,10 @@ const ArchiveScreen = () => {
       const key = toLocalDateKey(entry.date);
       const previous = map.get(key);
 
-      if (!previous || new Date(entry.date) > new Date(previous.date)) {
+      if (
+        !previous ||
+        parseLocalDate(entry.date) > parseLocalDate(previous.date)
+      ) {
         map.set(key, entry);
       }
     });
@@ -80,7 +123,7 @@ const ArchiveScreen = () => {
     now.setHours(0, 0, 0, 0);
 
     const firstEntryDate = journalsForUser.reduce((acc, entry) => {
-      const date = new Date(entry.date);
+      const date = parseLocalDate(entry.date);
       date.setHours(0, 0, 0, 0);
       if (!acc || date < acc) return date;
       return acc;
@@ -168,7 +211,7 @@ const ArchiveScreen = () => {
         subtitle="Tap any day to view that journal entry."
       >
         <View style={styles.rangeRow}>
-          {Object.keys(ranges).map((key) => (
+          {Object.keys(rangeLabels).map((key) => (
             <Pressable
               key={key}
               onPress={() => setRange(key)}
@@ -184,7 +227,6 @@ const ArchiveScreen = () => {
             </Pressable>
           ))}
         </View>
-
         <View style={styles.legendRow}>
           {moodScale.map((mood) => (
             <View key={mood} style={styles.legendItem}>
@@ -275,9 +317,35 @@ const ArchiveScreen = () => {
           <View style={styles.modalCard}>
             {selectedEntry ? (
               <>
-                <Text style={styles.modalTitle}>Daily Journal</Text>
+                <View style={styles.modalHeaderRow}>
+                  <Text style={styles.modalTitle}>Daily Journal</Text>
+                  <View style={styles.headerActions}>
+                    <Pressable
+                      style={styles.iconAction}
+                      onPress={editEntry}
+                      hitSlop={8}
+                    >
+                      <MaterialCommunityIcons
+                        name="pencil-outline"
+                        size={20}
+                        color={theme.colors.mutedText}
+                      />
+                    </Pressable>
+                    <Pressable
+                      style={styles.iconAction}
+                      onPress={deleteEntry}
+                      hitSlop={8}
+                    >
+                      <MaterialCommunityIcons
+                        name="trash-can-outline"
+                        size={20}
+                        color={theme.colors.mutedText}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
                 <Text style={styles.modalMeta}>
-                  {new Date(selectedEntry.date).toLocaleDateString()} · Rating:{" "}
+                  {formatLocalDate(selectedEntry.date)} · Rating:{" "}
                   {moodLabels[selectedEntry.mood] || selectedEntry.mood}
                 </Text>
                 {selectedEntry.highlight ? (
@@ -302,6 +370,11 @@ const ArchiveScreen = () => {
                   <Text style={styles.modalBody}>
                     <Text style={styles.modalLabel}>Proudest Moment: </Text>
                     {selectedEntry.proudestMoment}
+                  </Text>
+                ) : selectedEntry.proudest_moment ? (
+                  <Text style={styles.modalBody}>
+                    <Text style={styles.modalLabel}>Proudest Moment: </Text>
+                    {selectedEntry.proudest_moment}
                   </Text>
                 ) : null}
                 <Text style={styles.modalBody}>
@@ -430,10 +503,25 @@ const styles = StyleSheet.create({
     padding: theme.spacing.lg,
     gap: theme.spacing.xs,
   },
+  modalHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing.sm,
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  iconAction: {
+    padding: 4,
+  },
   modalTitle: {
     color: theme.colors.text,
     fontSize: 18,
     fontWeight: "700",
+    flex: 1,
   },
   modalMeta: {
     color: theme.colors.mutedText,
@@ -447,6 +535,36 @@ const styles = StyleSheet.create({
   modalBody: {
     color: theme.colors.text,
     fontSize: 14,
+  },
+  managementActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.md,
+  },
+  managementButton: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: "#FFFFFF",
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  managementButtonText: {
+    color: theme.colors.text,
+    fontWeight: "700",
+  },
+  managementButtonDanger: {
+    borderWidth: 1,
+    borderColor: "#F0B4B4",
+    backgroundColor: "#FFF5F5",
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  managementButtonDangerText: {
+    color: "#A33A3A",
+    fontWeight: "700",
   },
   closeButton: {
     alignSelf: "flex-end",

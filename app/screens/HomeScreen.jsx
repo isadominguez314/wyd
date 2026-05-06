@@ -6,6 +6,16 @@ import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
 import { moodLabels } from "../utils/moodLabels";
 
+const FILTERS = {
+  ALL: "all",
+  DAILY: "dailyJournals",
+  WEEKLY: "weeklyReports",
+  HIGHLIGHTS: "highlights",
+  SMILES: "smiles",
+  GRATITUDES: "gratitudes",
+  PROUDEST: "proudestMoments",
+};
+
 const NavTile = ({ label, onPress, color }) => (
   <Pressable
     style={[styles.tile, { backgroundColor: color }]}
@@ -17,13 +27,17 @@ const NavTile = ({ label, onPress, color }) => (
 
 const HomeScreen = ({ navigation }) => {
   const { state } = useAppContext();
-  const currentUsername = state.userProfile?.username;
+  const currentUserId = state.userProfile?.id;
+  const currentHandle =
+    state.userProfile?.handle || state.userProfile?.username;
   const firstName = state.userProfile?.firstName || "Friend";
   const myDailyJournals = state.dailyJournals.filter(
-    (entry) => entry.username === currentUsername,
+    (entry) =>
+      entry.user_id === currentUserId || entry.username === currentHandle,
   );
   const myWeeklyReports = state.weeklyReports.filter(
-    (entry) => entry.username === currentUsername,
+    (entry) =>
+      entry.user_id === currentUserId || entry.username === currentHandle,
   );
   const latestMood = myDailyJournals[0]?.mood;
 
@@ -89,14 +103,28 @@ const HomeScreen = ({ navigation }) => {
       </SectionCard>
 
       <View style={styles.statsGrid}>
-        <View style={styles.statCard}>
+        <Pressable
+          style={styles.statCard}
+          onPress={() =>
+            navigation.navigate("SearchScreen", {
+              initialFilter: FILTERS.DAILY,
+            })
+          }
+        >
           <Text style={styles.statLabel}>Daily Journal Entries</Text>
           <Text style={styles.statValue}>{myDailyJournals.length}</Text>
-        </View>
-        <View style={styles.statCard}>
+        </Pressable>
+        <Pressable
+          style={styles.statCard}
+          onPress={() =>
+            navigation.navigate("SearchScreen", {
+              initialFilter: FILTERS.WEEKLY,
+            })
+          }
+        >
           <Text style={styles.statLabel}>Weekly R.E.P.O.R.T. Entries</Text>
           <Text style={styles.statValue}>{myWeeklyReports.length}</Text>
-        </View>
+        </Pressable>
       </View>
     </ScreenContainer>
   );

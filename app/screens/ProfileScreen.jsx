@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -33,13 +33,13 @@ const ProfileScreen = () => {
     friendRequests,
     searchUsers,
     signOut,
-    seedTest3ChartData,
-    clearAppData,
   } = useAppContext();
 
   const [habitInput, setHabitInput] = useState("");
   const [friendQuery, setFriendQuery] = useState("");
-  const [selectedFriendUsername, setSelectedFriendUsername] = useState("");
+  const [selectedFriendHandle, setSelectedFriendHandle] = useState("");
+  const [selectedFriendDisplay, setSelectedFriendDisplay] = useState("");
+  const [friendResults, setFriendResults] = useState([]);
   const habitColors = state.userProfile.habitColors || {};
 
   const addHabit = () => {
@@ -51,7 +51,7 @@ const ProfileScreen = () => {
   };
 
   const addFriend = async () => {
-    const next = selectedFriendUsername || friendQuery.trim().toLowerCase();
+    const next = selectedFriendHandle || friendQuery.trim().toLowerCase();
     if (!next) return;
 
     const result = await addFriendByUsername(next);
@@ -61,51 +61,59 @@ const ProfileScreen = () => {
     }
 
     setFriendQuery("");
-    setSelectedFriendUsername("");
+    setSelectedFriendHandle("");
   };
 
-  const friendResults = searchUsers({
-    query: friendQuery,
-    excludeUsernames: [
-      state.userProfile.username,
-      ...state.userProfile.friendsList,
-      ...friendRequests.outgoing,
-      ...friendRequests.incoming,
-    ],
-  });
+  useEffect(() => {
+    console.log("[ProfileScreen] Component mounted/updated");
+    console.log("[ProfileScreen] Outgoing requests:", friendRequests.outgoing);
+    console.log("[ProfileScreen] Incoming requests:", friendRequests.incoming);
+    console.log("[ProfileScreen] Friends list:", state.userProfile.friendsList);
+  }, [state.userProfile.friendsList, friendRequests]);
 
-  const confirmReset = () => {
-    Alert.alert("Reset app data?", "This clears all local WYD entries.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Reset",
-        style: "destructive",
-        onPress: async () => {
-          await clearAppData();
-          Alert.alert("Done", "Local data was cleared.");
-        },
-      },
-    ]);
-  };
-
-  const handleSeedTestData = async () => {
-    const result = await seedTest3ChartData();
-    if (!result.ok) {
-      Alert.alert("Seed failed", result.error);
+  useEffect(() => {
+    if (!friendQuery.trim()) {
+      setFriendResults([]);
       return;
     }
 
-    Alert.alert(
-      "Seed complete",
-      `Generated ${result.count} daily journals for test3 across ${result.daysWindow} days with ${result.skippedDays} skipped days.`,
-    );
-  };
+    const fetchFriendResults = async () => {
+      try {
+        console.log("[PROFILE DEBUG] Searching for friends:", friendQuery);
+        const results = await searchUsers({
+          query: friendQuery,
+          excludeUsernames: [
+            state.userProfile.handle,
+            ...state.userProfile.friendsList,
+            ...friendRequests.outgoing.map(
+              (request) => request.addressee?.handle || "",
+            ),
+            ...friendRequests.incoming.map(
+              (request) => request.requester?.handle || "",
+            ),
+          ],
+        });
+        console.log("[PROFILE DEBUG] Search results:", results);
+        setFriendResults(results || []);
+      } catch (error) {
+        console.error("[PROFILE DEBUG] Error fetching friend results:", error);
+        setFriendResults([]);
+      }
+    };
+
+    fetchFriendResults();
+  }, [
+    friendQuery,
+    state.userProfile.handle,
+    state.userProfile.friendsList,
+    friendRequests,
+  ]);
 
   return (
     <ScreenContainer>
       <SectionCard
         title={`${state.userProfile.firstName} ${state.userProfile.lastName}`}
-        subtitle={`@${state.userProfile.username}`}
+        subtitle={`@${state.userProfile.handle}`}
       ></SectionCard>
 
       <SectionCard title="Habits">
@@ -113,6 +121,9 @@ const ProfileScreen = () => {
           <TextInput
             style={[styles.input, styles.flex]}
             value={habitInput}
+            returnKeyType="done"
+            blurOnSubmit={true}
+            onSubmitEditing={addHabit}
             onChangeText={setHabitInput}
             placeholder="Add habit"
           />
@@ -139,55 +150,60 @@ const ProfileScreen = () => {
         <View style={styles.row}>
           <TextInput
             style={[styles.input, styles.flex]}
-            value={friendQuery}
+            value={
+              selectedFriendHandle
+                ? `${selectedFriendDisplay} (@${selectedFriendHandle})`
+                : friendQuery
+            }
             onChangeText={(text) => {
               setFriendQuery(text);
-              setSelectedFriendUsername("");
+              if (selectedFriendHandle) {
+                setSelectedFriendHandle("");
+                setSelectedFriendDisplay("");
+              }
             }}
-            placeholder="Search first name, last name, or username"
+            placeholder="Search first name, last name, email, or handle"
           />
         </View>
         <UserSearchDropdown
-          visible={friendQuery.trim().length > 0}
+          visible={friendQuery.trim().length > 0 && !selectedFriendHandle}
           results={friendResults}
           onSelect={(user) => {
-            setFriendQuery(
-              `${user.firstName} ${user.lastName} (@${user.username})`,
+            setSelectedFriendHandle(user.handle || user.username);
+            setSelectedFriendDisplay(
+              `${user.firstName || ""} ${user.lastName || ""}`.trim(),
             );
-            setSelectedFriendUsername(user.username);
+            setFriendQuery("");
+            setFriendResults([]);
           }}
           emptyText="No matching users found."
+          plainEmpty={true}
         />
         <Pressable style={styles.smallButton} onPress={addFriend}>
           <Text style={styles.smallButtonText}>Send Request</Text>
         </Pressable>
-        <PillList
-          items={state.userProfile.friendsList}
-          onRemove={(item) =>
-            updateFriends(
-              state.userProfile.friendsList.filter((friend) => friend !== item),
-            )
-          }
-        />
+        <FriendList friends={state.userProfile.friendProfiles || []} />
       </SectionCard>
 
       <SectionCard title="Incoming Requests">
         {friendRequests.incoming.length === 0 ? (
           <Text style={styles.hint}>No incoming requests.</Text>
         ) : (
-          friendRequests.incoming.map((username) => (
-            <View key={username} style={styles.requestRow}>
-              <Text style={styles.requestName}>{username}</Text>
+          friendRequests.incoming.map((request) => (
+            <View key={request.id} style={styles.requestRow}>
+              <Text style={styles.requestName}>
+                @{request.requester?.handle || request.requester_id}
+              </Text>
               <View style={styles.requestActions}>
                 <Pressable
                   style={[styles.smallButton, styles.approveButton]}
-                  onPress={() => approveFriendRequest(username)}
+                  onPress={() => approveFriendRequest(request.id)}
                 >
                   <Text style={styles.smallButtonText}>Approve</Text>
                 </Pressable>
                 <Pressable
                   style={[styles.smallButton, styles.declineButton]}
-                  onPress={() => declineFriendRequest(username)}
+                  onPress={() => declineFriendRequest(request.id)}
                 >
                   <Text style={styles.smallButtonText}>Decline</Text>
                 </Pressable>
@@ -201,18 +217,15 @@ const ProfileScreen = () => {
         {friendRequests.outgoing.length === 0 ? (
           <Text style={styles.hint}>No outgoing requests.</Text>
         ) : (
-          <PillList items={friendRequests.outgoing} />
+          <PillList
+            items={friendRequests.outgoing.map(
+              (request) => request.addressee?.handle || request.addressee_id,
+            )}
+          />
         )}
       </SectionCard>
 
       <PrimaryButton label="Sign Out" onPress={signOut} />
-
-      <PrimaryButton
-        label="Generate test3 chart data"
-        onPress={handleSeedTestData}
-      />
-
-      <PrimaryButton label="Reset Local Data" onPress={confirmReset} />
     </ScreenContainer>
   );
 };
@@ -246,6 +259,26 @@ const PillList = ({ items, onRemove, colorMap }) => (
         >
           <Text style={styles.pillText}>{onRemove ? `${item} ×` : item}</Text>
         </Pressable>
+      ))
+    )}
+  </View>
+);
+
+const FriendList = ({ friends }) => (
+  <View style={styles.pillWrap}>
+    {friends.length === 0 ? (
+      <Text style={styles.hint}>No friends yet.</Text>
+    ) : (
+      friends.map((friend, idx) => (
+        <View
+          key={friend.id || friend.handle || idx}
+          style={[
+            styles.pill,
+            { backgroundColor: pillColors[idx % pillColors.length] },
+          ]}
+        >
+          <Text style={styles.pillText}>@{friend.handle}</Text>
+        </View>
       ))
     )}
   </View>

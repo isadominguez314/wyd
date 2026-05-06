@@ -62,7 +62,9 @@ const CenteredScreen = ({ title, subtitle, children, showLogo }) => (
 
 const AuthScreen = () => {
   const { auth, signIn, signUp, searchUsers } = useAppContext();
-  const [mode, setMode] = React.useState(auth.hasAccount ? "signin" : "signup");
+  const [mode, setMode] = React.useState(
+    auth.isAuthenticated ? "signin" : "signup",
+  );
   // Refs for sign-in form
   const signInUsernameRef = React.useRef(null);
   const signInPasswordRef = React.useRef(null);
@@ -70,31 +72,39 @@ const AuthScreen = () => {
   // Refs for sign-up step 1 form
   const signUpFirstNameRef = React.useRef(null);
   const signUpLastNameRef = React.useRef(null);
-  const signUpUsernameRef = React.useRef(null);
+  const signUpEmailRef = React.useRef(null);
+  const signUpHandleRef = React.useRef(null);
   const signUpPasswordRef = React.useRef(null);
+
+  // Refs for sign-up step 2 form
+  const habitInputRef = React.useRef(null);
 
   const [signupStep, setSignupStep] = React.useState(1);
   const [signupDraft, setSignupDraft] = React.useState({
     firstName: "",
     lastName: "",
-    username: "",
+    email: "",
+    handle: "",
     password: "",
     habitsList: [],
     friendsList: [],
   });
   const [habitInput, setHabitInput] = React.useState("");
   const [friendQuery, setFriendQuery] = React.useState("");
+  const [friendResults, setFriendResults] = React.useState([]);
+  const [selectedFriendHandle, setSelectedFriendHandle] = React.useState("");
+  const [selectedFriendDisplay, setSelectedFriendDisplay] = React.useState("");
 
   const [signInForm, setSignInForm] = React.useState({
-    username: "",
+    email: "",
     password: "",
   });
 
   React.useEffect(() => {
-    if (!auth.hasAccount) {
+    if (!auth.isAuthenticated) {
       setMode("signup");
     }
-  }, [auth.hasAccount]);
+  }, [auth.isAuthenticated]);
 
   const handleSignIn = async () => {
     const result = await signIn(signInForm);
@@ -107,7 +117,8 @@ const AuthScreen = () => {
     if (
       !signupDraft.firstName.trim() ||
       !signupDraft.lastName.trim() ||
-      !signupDraft.username.trim() ||
+      !signupDraft.email.trim() ||
+      !signupDraft.handle.trim() ||
       !signupDraft.password.trim()
     ) {
       Alert.alert("Missing fields", "Please complete all required fields.");
@@ -147,36 +158,69 @@ const AuthScreen = () => {
     }));
   };
 
-  const removeSignupFriend = (username) => {
-    setSignupDraft((prev) => ({
-      ...prev,
-      friendsList: prev.friendsList.filter((friend) => friend !== username),
-    }));
-  };
+  React.useEffect(() => {
+    if (!friendQuery.trim()) {
+      setFriendResults([]);
+      return;
+    }
 
-  const friendResults = searchUsers({
-    query: friendQuery,
-    excludeUsernames: [
-      signupDraft.username.trim().toLowerCase(),
-      ...signupDraft.friendsList,
-    ],
-  });
+    const fetchFriendResults = async () => {
+      try {
+        console.log("[DEBUG] Searching for friends:", friendQuery);
+        const results = await searchUsers({
+          query: friendQuery,
+          excludeUsernames: [signupDraft.handle.trim().toLowerCase()],
+        });
+        console.log("[DEBUG] Search results:", results);
+        setFriendResults(results || []);
+      } catch (error) {
+        console.error("[DEBUG] Error fetching friend results:", error);
+        setFriendResults([]);
+      }
+    };
+
+    fetchFriendResults();
+  }, [friendQuery, signupDraft.handle]);
 
   const addSignupFriend = (user) => {
-    if (signupDraft.friendsList.includes(user.username)) return;
+    const handle = user.handle || user.username;
+    setSelectedFriendHandle(handle);
+    setSelectedFriendDisplay(
+      `${user.firstName || ""} ${user.lastName || ""}`.trim(),
+    );
+    setFriendQuery("");
+    setFriendResults([]);
+  };
 
+  const addFriendToSignupList = () => {
+    if (!selectedFriendHandle) return;
+    // Only add if not already in the list
+    if (signupDraft.friendsList.includes(selectedFriendHandle)) {
+      setSelectedFriendHandle("");
+      setSelectedFriendDisplay("");
+      return;
+    }
     setSignupDraft((prev) => ({
       ...prev,
-      friendsList: [...prev.friendsList, user.username],
+      friendsList: [...prev.friendsList, selectedFriendHandle],
     }));
-    setFriendQuery("");
+    setSelectedFriendHandle("");
+    setSelectedFriendDisplay("");
+  };
+
+  const removeFriendFromSignupList = (handle) => {
+    setSignupDraft((prev) => ({
+      ...prev,
+      friendsList: prev.friendsList.filter((h) => h !== handle),
+    }));
   };
 
   const handleSignUp = async () => {
     const result = await signUp({
+      email: signupDraft.email,
       firstName: signupDraft.firstName,
       lastName: signupDraft.lastName,
-      username: signupDraft.username,
+      handle: signupDraft.handle,
       password: signupDraft.password,
       habitsList: signupDraft.habitsList,
       friendsList: signupDraft.friendsList,
@@ -196,10 +240,10 @@ const AuthScreen = () => {
     setSignupDraft({
       firstName: "",
       lastName: "",
-      username: "",
+      email: "",
+      handle: "",
       password: "",
       habitsList: [],
-      friendsList: [],
     });
   };
 
@@ -208,12 +252,12 @@ const AuthScreen = () => {
       title={isSignIn ? "Sign In" : "Create Account"}
       subtitle={
         isSignIn
-          ? "Enter your username and password."
+          ? "Enter your email and password."
           : signupStep === 1
             ? "Step 1 of 3: Create your account."
             : signupStep === 2
               ? "Step 2 of 3: Add habits to track."
-              : "Step 3 of 3: Find friends by name or username."
+              : "Step 3 of 3: Find friends by name or handle."
       }
       showLogo={true}
     >
@@ -221,15 +265,16 @@ const AuthScreen = () => {
         <>
           <TextInput
             style={styles.input}
-            placeholder="Username"
+            placeholder="Email"
             autoCapitalize="none"
-            value={signInForm.username}
+            keyboardType="email-address"
+            value={signInForm.email}
             ref={signInUsernameRef}
             returnKeyType="next"
             blurOnSubmit={false}
             onSubmitEditing={() => signInPasswordRef.current?.focus()}
             onChangeText={(text) =>
-              setSignInForm((prev) => ({ ...prev, username: text }))
+              setSignInForm((prev) => ({ ...prev, email: text }))
             }
           />
 
@@ -274,22 +319,39 @@ const AuthScreen = () => {
                 ref={signUpLastNameRef}
                 returnKeyType="next"
                 blurOnSubmit={false}
-                onSubmitEditing={() => signUpUsernameRef.current?.focus()}
+                onSubmitEditing={() => signUpEmailRef.current?.focus()}
                 onChangeText={(text) =>
                   setSignupDraft((prev) => ({ ...prev, lastName: text }))
                 }
               />
               <TextInput
                 style={styles.input}
-                placeholder="Username"
+                placeholder="Email"
                 autoCapitalize="none"
-                value={signupDraft.username}
-                ref={signUpUsernameRef}
+                keyboardType="email-address"
+                value={signupDraft.email}
+                ref={signUpEmailRef}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => signUpHandleRef.current?.focus()}
+                onChangeText={(text) =>
+                  setSignupDraft((prev) => ({ ...prev, email: text }))
+                }
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Handle"
+                autoCapitalize="none"
+                value={signupDraft.handle}
+                ref={signUpHandleRef}
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onSubmitEditing={() => signUpPasswordRef.current?.focus()}
                 onChangeText={(text) =>
-                  setSignupDraft((prev) => ({ ...prev, username: text }))
+                  setSignupDraft((prev) => ({
+                    ...prev,
+                    handle: text.trim().toLowerCase(),
+                  }))
                 }
               />
               <TextInput
@@ -324,6 +386,10 @@ const AuthScreen = () => {
                   style={[styles.input, styles.flex]}
                   placeholder="Add habit"
                   value={habitInput}
+                  ref={habitInputRef}
+                  returnKeyType="done"
+                  blurOnSubmit={true}
+                  onSubmitEditing={addHabit}
                   onChangeText={setHabitInput}
                 />
                 <Pressable style={styles.smallButton} onPress={addHabit}>
@@ -377,21 +443,40 @@ const AuthScreen = () => {
             <>
               <TextInput
                 style={styles.input}
-                placeholder="Search by first, last, or username"
-                value={friendQuery}
-                onChangeText={setFriendQuery}
+                placeholder="Search by first, last, email, or handle"
+                value={
+                  selectedFriendHandle
+                    ? `${selectedFriendDisplay} (@${selectedFriendHandle})`
+                    : friendQuery
+                }
+                onChangeText={(text) => {
+                  setFriendQuery(text);
+                  if (selectedFriendHandle) {
+                    setSelectedFriendHandle("");
+                    setSelectedFriendDisplay("");
+                  }
+                }}
               />
               <UserSearchDropdown
-                visible={friendQuery.trim().length > 0}
+                visible={friendQuery.trim().length > 0 && !selectedFriendHandle}
                 results={friendResults}
                 onSelect={addSignupFriend}
                 emptyText="No matching users found."
                 plainEmpty={true}
               />
 
+              {selectedFriendHandle && (
+                <Pressable
+                  style={styles.smallButton}
+                  onPress={addFriendToSignupList}
+                >
+                  <Text style={styles.smallButtonText}>Send Request</Text>
+                </Pressable>
+              )}
+
               <PillList
                 items={signupDraft.friendsList}
-                onRemove={removeSignupFriend}
+                onRemove={removeFriendFromSignupList}
               />
 
               <View style={styles.actionsRow}>
@@ -418,7 +503,7 @@ const AuthScreen = () => {
             resetSignupFlow();
           }
         }}
-        disabled={!auth.hasAccount && isSignIn}
+        disabled={!auth.isAuthenticated && isSignIn}
       >
         <Text style={styles.ghostButtonText}>
           {isSignIn

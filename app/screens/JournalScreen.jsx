@@ -16,6 +16,7 @@ import PrimaryButton from "../components/PrimaryButton";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
 import { moodLabels, moodOptions } from "../utils/moodLabels";
+import { parseLocalDate, toLocalDateKey } from "../utils/dateUtils";
 
 const journalPrompts = [
   { key: "highlight", label: "What was the highlight of your day?" },
@@ -64,10 +65,15 @@ const renderHighlightedLabel = (text) => {
   return parts;
 };
 
-const JournalScreen = ({ navigation }) => {
-  const { state, addDailyJournal, addIndividualEntry } = useAppContext();
-  const [mood, setMood] = useState(null);
-  const [isPublic, setIsPublic] = useState(true);
+const JournalScreen = ({ navigation, route }) => {
+  const { state, addDailyJournal, updateDailyJournal, addIndividualEntry } =
+    useAppContext();
+  const editingJournal = route?.params?.journal || null;
+  const isEditing = Boolean(editingJournal?.id);
+  const [mood, setMood] = useState(editingJournal?.mood ?? null);
+  const [isPublic, setIsPublic] = useState(
+    editingJournal?.is_public ?? editingJournal?.public ?? true,
+  );
   const moodScale = moodOptions || [1, 2, 3, 4, 5, 6, 7];
   // Refs for keyboard navigation
   const highlightRef = React.useRef(null);
@@ -76,17 +82,25 @@ const JournalScreen = ({ navigation }) => {
   const proudestMomentRef = React.useRef(null);
 
   const [form, setForm] = useState({
-    highlight: "",
-    smile: "",
-    grateful: "",
-    proudestMoment: "",
+    highlight: editingJournal?.highlight || "",
+    smile: editingJournal?.smile || "",
+    grateful: editingJournal?.grateful || "",
+    proudestMoment:
+      editingJournal?.proudestMoment || editingJournal?.proudest_moment || "",
   });
-  const [selectedHabits, setSelectedHabits] = useState([]);
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedHabits, setSelectedHabits] = useState(
+    editingJournal?.habits || [],
+  );
+  const [selectedDate, setSelectedDate] = useState(
+    editingJournal?.entry_date || editingJournal?.date
+      ? parseLocalDate(editingJournal.entry_date || editingJournal.date)
+      : new Date(),
+  );
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   const habits = state.userProfile.habitsList || [];
   const habitColors = state.userProfile.habitColors || {};
+  const submitLabel = isEditing ? "Update Journal" : "Save Journal";
 
   const formatDate = (date) => {
     return date.toLocaleDateString("en-US", {
@@ -105,8 +119,18 @@ const JournalScreen = ({ navigation }) => {
     );
   };
 
-  const submit = () => {
-    const dateString = selectedDate.toISOString();
+  const submit = async () => {
+    const journalDate = new Date(selectedDate);
+    journalDate.setHours(12, 0, 0, 0);
+    const dateString = journalDate.toISOString();
+    const selectedDateKey = toLocalDateKey(dateString);
+    const existingJournal = isEditing
+      ? editingJournal
+      : state.dailyJournals.find(
+          (entry) =>
+            toLocalDateKey(entry.entry_date || entry.date) === selectedDateKey,
+        );
+
     // Trim text fields to remove accidental whitespace/newlines
     const trimmedForm = {
       highlight: form.highlight?.trim() || "",
@@ -119,24 +143,77 @@ const JournalScreen = ({ navigation }) => {
       mood: mood ?? null,
       ...trimmedForm,
       habits: selectedHabits,
-      public: isPublic,
-      date: dateString,
+      isPublic,
+      entryDate: dateString,
     };
 
-    addDailyJournal(payload);
+    const persistJournal = async () => {
+      if (isEditing) {
+        const updateResult = await updateDailyJournal(existingJournal.id, {
+          mood: mood ?? null,
+          highlight: trimmedForm.highlight,
+          smile: trimmedForm.smile,
+          grateful: trimmedForm.grateful,
+          proudestMoment: trimmedForm.proudestMoment,
+          isPublic,
+          habits: selectedHabits,
+          entryDate: dateString,
+        });
 
-    journalPrompts.forEach((prompt) => {
-      const content = trimmedForm[prompt.key]?.trim();
-      if (!content) return;
-      addIndividualEntry({
-        type: prompt.key,
-        content,
-        date: dateString,
-      });
-    });
+        if (!updateResult?.ok) {
+          Alert.alert(
+            "Save failed",
+            updateResult?.error || "Could not update existing journal.",
+          );
+          return;
+        }
+      } else {
+        const addResult = await addDailyJournal(payload);
+        if (!addResult?.ok) {
+          Alert.alert(
+            "Save failed",
+            addResult?.error || "Could not save journal entry.",
+          );
+          return;
+        }
+      }
 
-    Alert.alert("Saved", "Your journal entry was added.");
-    navigation.goBack();
+      await Promise.all(
+        isEditing
+          ? []
+          : journalPrompts.map(async (prompt) => {
+              const content = trimmedForm[prompt.key]?.trim();
+              if (!content) return;
+              return addIndividualEntry({
+                entryType: prompt.key,
+                content,
+                entryDate: dateString,
+              });
+            }),
+      );
+
+      Alert.alert(
+        "Saved",
+        isEditing
+          ? "Your journal entry was updated."
+          : "Your journal entry was added.",
+      );
+      navigation.goBack();
+    };
+
+    if (!isEditing && existingJournal) {
+      Alert.alert(
+        "Overwrite journal?",
+        "A journal already exists for this day. Saving again will replace the existing entry.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Overwrite", style: "destructive", onPress: persistJournal },
+        ],
+      );
+      return;
+    }
+
+    await persistJournal();
   };
 
   return (
@@ -302,7 +379,7 @@ const JournalScreen = ({ navigation }) => {
         </View>
       </SectionCard>
 
-      <PrimaryButton label="Save Journal" onPress={submit} tone="yellow" />
+      <PrimaryButton label={submitLabel} onPress={submit} tone="yellow" />
     </ScreenContainer>
   );
 };

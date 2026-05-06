@@ -7,13 +7,14 @@ import React, {
   useState,
 } from "react";
 import {
-  INITIAL_DATA,
-  clearAllStorage,
-  loadInitialState,
-  loadUsersDirectory,
-  persistState,
-  persistUsersDirectory,
-} from "../storage/storage";
+  getCurrentUser,
+  onAuthStateChange,
+  authSignUp,
+  authSignIn,
+  authSignOut,
+  isValidHandle,
+} from "../storage/supabaseClient";
+import * as DB from "../storage/supabaseService";
 import { buildHabitColorMap } from "../utils/habitColors";
 
 const AppContext = createContext(undefined);
@@ -29,46 +30,134 @@ const ACTIONS = {
   UPDATE_HABITS: "UPDATE_HABITS",
   UPDATE_FRIENDS: "UPDATE_FRIENDS",
   UPDATE_DAILY_JOURNAL: "UPDATE_DAILY_JOURNAL",
+  DELETE_DAILY_JOURNAL: "DELETE_DAILY_JOURNAL",
   UPDATE_WEEKLY_REPORT: "UPDATE_WEEKLY_REPORT",
+  DELETE_WEEKLY_REPORT: "DELETE_WEEKLY_REPORT",
   RESET_STATE: "RESET_STATE",
 };
 
-const normalizeUserRecord = (user) => ({
-  ...user,
-  habitsList: user.habitsList || [],
-  habitColors: buildHabitColorMap(
-    user.habitsList || [],
-    user.habitColors || {},
-  ),
-  friendsList: user.friendsList || [],
-  incomingFriendRequests: user.incomingFriendRequests || [],
-  outgoingFriendRequests: user.outgoingFriendRequests || [],
-});
+const INITIAL_DATA = {
+  userProfile: {
+    id: null,
+    email: "",
+    handle: "",
+    firstName: "",
+    lastName: "",
+    avatarUrl: null,
+    habitsList: [],
+    habitColors: {},
+    friendsList: [],
+    friendProfiles: [],
+  },
+  dailyJournals: [],
+  weeklyReports: [],
+  individualEntries: [],
+  feedPosts: [],
+};
 
 const clampMood = (value) => Math.max(1, Math.min(7, value));
 
-const createSeededRandom = (seed) => {
-  let state = seed;
+const toFeedProfile = (profile) => {
+  if (Array.isArray(profile)) return profile[0] || null;
+  return profile || null;
+};
 
-  return () => {
-    state = (state * 1664525 + 1013904223) % 4294967296;
-    return state / 4294967296;
+const buildFeedPost = (entry, kind, likedByCurrentUser = false) => {
+  const profile = toFeedProfile(entry.profiles);
+  const date =
+    entry.entry_date || entry.week_start || entry.date || entry.created_at;
+
+  const likeCount = Array.isArray(entry.daily_journal_likes)
+    ? Number(entry.daily_journal_likes[0]?.count) || 0
+    : Array.isArray(entry.weekly_report_likes)
+      ? Number(entry.weekly_report_likes[0]?.count) || 0
+      : 0;
+  const commentCount = Array.isArray(entry.daily_journal_comments)
+    ? Number(entry.daily_journal_comments[0]?.count) || 0
+    : Array.isArray(entry.weekly_report_comments)
+      ? Number(entry.weekly_report_comments[0]?.count) || 0
+      : 0;
+
+  return {
+    id: entry.id,
+    kind,
+    author: profile?.handle || entry.handle || entry.username || "Friend",
+    authorProfile: profile || null,
+    mood: kind === "daily" ? entry.mood : undefined,
+    highlight: entry.highlight,
+    smile: entry.smile,
+    grateful: entry.grateful,
+    proudestMoment: entry.proudestMoment || entry.proudest_moment,
+    habits: entry.habits || [],
+    read: entry.read,
+    eat: entry.eat,
+    play: entry.play,
+    obsess: entry.obsess,
+    recommend: entry.recommend,
+    treat: entry.treat,
+    date,
+    public: entry.is_public ?? entry.public ?? true,
+    likeCount,
+    commentCount,
+    likedByCurrentUser,
+    likes: [],
+    comments: [],
   };
 };
 
-const shuffle = (array, randomFn) => {
-  const copy = [...array];
-
-  for (let index = copy.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(randomFn() * (index + 1));
-    [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
-  }
-
-  return copy;
+const normalizeDailyJournal = (entry, profileHandle) => {
+  const date = entry.entry_date || entry.date || entry.created_at;
+  return {
+    ...entry,
+    date,
+    username: entry.username || entry.handle || profileHandle || null,
+    proudestMoment: entry.proudestMoment || entry.proudest_moment || "",
+    public: entry.is_public ?? entry.public ?? true,
+    habits: entry.habits || [],
+  };
 };
 
-const pickFrom = (items, randomFn) =>
-  items[Math.floor(randomFn() * items.length)];
+const normalizeWeeklyReport = (entry, profileHandle) => {
+  const date = entry.week_start || entry.date || entry.created_at;
+  return {
+    ...entry,
+    date,
+    username: entry.username || entry.handle || profileHandle || null,
+    public: entry.is_public ?? entry.public ?? true,
+  };
+};
+
+const normalizeIndividualEntry = (entry, profileHandle) => ({
+  ...entry,
+  type: entry.type || entry.entry_type || "",
+  entry_type: entry.entry_type || entry.type || "",
+  date: entry.entry_date || entry.date || entry.created_at,
+  username: entry.username || entry.handle || profileHandle || null,
+});
+
+const normalizeHabitNames = (habits) =>
+  (Array.isArray(habits) ? habits : [])
+    .map((habit) => (typeof habit === "string" ? habit : habit?.name))
+    .filter(Boolean);
+
+const hydrateDailyJournalsWithHabits = async (journals, profileHandle) => {
+  const hydratedJournals = await Promise.all(
+    (journals || []).map(async (journal) => {
+      try {
+        const journalHabits = await DB.getJournalHabits(journal.id);
+        return normalizeDailyJournal(
+          { ...journal, habits: normalizeHabitNames(journalHabits) },
+          profileHandle,
+        );
+      } catch (error) {
+        console.error("Error loading journal habits:", error);
+        return normalizeDailyJournal(journal, profileHandle);
+      }
+    }),
+  );
+
+  return hydratedJournals;
+};
 
 const appReducer = (state, action) => {
   switch (action.type) {
@@ -137,7 +226,16 @@ const appReducer = (state, action) => {
       return {
         ...state,
         dailyJournals: state.dailyJournals.map((journal) =>
-          journal.date === id ? { ...journal, ...updates } : journal,
+          journal.id === id ? { ...journal, ...updates } : journal,
+        ),
+      };
+    }
+    case ACTIONS.DELETE_DAILY_JOURNAL: {
+      const { id } = action.payload;
+      return {
+        ...state,
+        dailyJournals: state.dailyJournals.filter(
+          (journal) => journal.id !== id,
         ),
       };
     }
@@ -146,8 +244,15 @@ const appReducer = (state, action) => {
       return {
         ...state,
         weeklyReports: state.weeklyReports.map((report) =>
-          report.date === id ? { ...report, ...updates } : report,
+          report.id === id ? { ...report, ...updates } : report,
         ),
+      };
+    }
+    case ACTIONS.DELETE_WEEKLY_REPORT: {
+      const { id } = action.payload;
+      return {
+        ...state,
+        weeklyReports: state.weeklyReports.filter((report) => report.id !== id),
       };
     }
     case ACTIONS.RESET_STATE:
@@ -160,768 +265,1135 @@ const appReducer = (state, action) => {
 export const AppProvider = ({ children }) => {
   const [state, dispatch] = useReducer(appReducer, INITIAL_DATA);
   const [isHydrated, setIsHydrated] = useState(false);
-  const [usersDirectory, setUsersDirectory] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [publicUsers, setPublicUsers] = useState([]);
   const [friendRequests, setFriendRequests] = useState({
     incoming: [],
     outgoing: [],
   });
   const [auth, setAuth] = useState({
-    hasAccount: false,
+    user: null,
     isAuthenticated: false,
+    hasAccount: false,
     currentUsername: null,
   });
 
-  const syncCurrentUserView = (directory, currentUsername) => {
-    if (!currentUsername) return;
+  const resolveDailyJournalId = (journalKey) => {
+    if (!journalKey) return journalKey;
 
-    const currentUser = directory.find(
-      (user) => user.username === currentUsername,
+    const journal = state.dailyJournals.find(
+      (entry) =>
+        entry.id === journalKey ||
+        entry.entry_date === journalKey ||
+        entry.date === journalKey,
     );
-    if (!currentUser) return;
 
-    dispatch({
-      type: ACTIONS.SET_PROFILE,
-      payload: {
-        firstName: currentUser.firstName,
-        lastName: currentUser.lastName,
-        username: currentUser.username,
-        habitsList: currentUser.habitsList,
-        habitColors: buildHabitColorMap(
-          currentUser.habitsList,
-          currentUser.habitColors,
-        ),
-        friendsList: currentUser.friendsList,
-      },
-    });
-
-    setFriendRequests({
-      incoming: currentUser.incomingFriendRequests,
-      outgoing: currentUser.outgoingFriendRequests,
-    });
+    return journal?.id || journalKey;
   };
 
+  const resolveWeeklyReportId = (reportKey) => {
+    if (!reportKey) return reportKey;
+
+    const report = state.weeklyReports.find(
+      (entry) =>
+        entry.id === reportKey ||
+        entry.week_start === reportKey ||
+        entry.date === reportKey,
+    );
+
+    return report?.id || reportKey;
+  };
+
+  const loadFeedPosts = async (userId) => {
+    try {
+      const [dailyFeed, weeklyFeed, likedDailyIds, likedWeeklyIds] =
+        await Promise.all([
+          DB.getFriendsFeedJournals(userId),
+          DB.getFriendsFeedReports(userId),
+          DB.getUserDailyJournalLikeIds(userId),
+          DB.getUserWeeklyReportLikeIds(userId),
+        ]);
+
+      const likedDailySet = new Set(likedDailyIds);
+      const likedWeeklySet = new Set(likedWeeklyIds);
+
+      return [
+        ...dailyFeed.map((entry) =>
+          buildFeedPost(entry, "daily", likedDailySet.has(entry.id)),
+        ),
+        ...weeklyFeed.map((entry) =>
+          buildFeedPost(entry, "weekly", likedWeeklySet.has(entry.id)),
+        ),
+      ].sort((a, b) => new Date(b.date) - new Date(a.date));
+    } catch (error) {
+      console.error("Error loading feed posts:", error);
+      return [];
+    }
+  };
+
+  const refreshFeedPosts = async (userId) => {
+    const feedPosts = await loadFeedPosts(userId);
+    dispatch({
+      type: ACTIONS.HYDRATE_STATE,
+      payload: { feedPosts },
+    });
+    return feedPosts;
+  };
+
+  const refreshFriendRequests = async (userId) => {
+    try {
+      const [incomingRequests, outgoingRequests] = await Promise.all([
+        DB.getIncomingFriendRequests(userId),
+        DB.getOutgoingFriendRequests(userId),
+      ]);
+      setFriendRequests({
+        incoming: incomingRequests,
+        outgoing: outgoingRequests,
+      });
+    } catch (error) {
+      console.error("Error refreshing friend requests:", error);
+    }
+  };
+
+  // Monitor auth state changes and hydrate user data
   useEffect(() => {
     let isMounted = true;
 
     const hydrate = async () => {
-      const [loadedState, loadedUsersDirectory] = await Promise.all([
-        loadInitialState(),
-        loadUsersDirectory(),
-      ]);
-      if (!isMounted) return;
+      try {
+        // Check if user is already logged in
+        let currentUser = null;
+        try {
+          currentUser = await getCurrentUser();
+        } catch (authError) {
+          // No active session - user is not logged in
+          currentUser = null;
+        }
+        const loadedUsers = await DB.listProfiles();
 
-      const normalizedDirectory = loadedUsersDirectory.map(normalizeUserRecord);
-      const normalizedProfile = {
-        ...loadedState.userProfile,
-        habitColors: buildHabitColorMap(
-          loadedState.userProfile?.habitsList || [],
-          loadedState.userProfile?.habitColors || {},
-        ),
-      };
+        if (!isMounted) return;
 
-      dispatch({
-        type: ACTIONS.HYDRATE_STATE,
-        payload: { ...loadedState, userProfile: normalizedProfile },
-      });
-      setUsersDirectory(normalizedDirectory);
-      setAuth({
-        hasAccount: normalizedDirectory.length > 0,
-        isAuthenticated: false,
-        currentUsername: null,
-      });
-      setIsHydrated(true);
+        setPublicUsers(
+          loadedUsers.map((profile) => ({
+            handle: profile.handle,
+            firstName: profile.first_name,
+            lastName: profile.last_name,
+            username: profile.handle,
+          })),
+        );
 
-      if (normalizedDirectory.length !== loadedUsersDirectory.length) {
-        await persistUsersDirectory(normalizedDirectory);
+        if (currentUser) {
+          setAuth({
+            user: currentUser,
+            isAuthenticated: true,
+            hasAccount: true,
+            currentUsername: null,
+          });
+
+          // Fetch user profile, habits, journals
+          try {
+            const [
+              profile,
+              habits,
+              journals,
+              reports,
+              entries,
+              incomingRequests,
+              outgoingRequests,
+            ] = await Promise.all([
+              DB.getProfile(currentUser.id),
+              DB.getUserHabits(currentUser.id),
+              DB.getUserDailyJournals(currentUser.id),
+              DB.getUserWeeklyReports(currentUser.id),
+              DB.getUserIndividualEntries(currentUser.id),
+              DB.getIncomingFriendRequests(currentUser.id),
+              DB.getOutgoingFriendRequests(currentUser.id),
+            ]);
+
+            if (!isMounted) return;
+
+            // Get friends list
+            const friends = await DB.getFriends(currentUser.id);
+            const friendIds = friends.map((f) => f.id);
+
+            const habitColors = buildHabitColorMap(
+              habits.map((h) => h.name),
+              {},
+            );
+
+            const hydratedJournals = await hydrateDailyJournalsWithHabits(
+              journals,
+              profile.handle,
+            );
+
+            dispatch({
+              type: ACTIONS.HYDRATE_STATE,
+              payload: {
+                userProfile: {
+                  id: currentUser.id,
+                  email: profile.email,
+                  handle: profile.handle,
+                  username: profile.handle,
+                  firstName: profile.first_name,
+                  lastName: profile.last_name,
+                  avatarUrl: profile.avatar_url,
+                  habitsList: habits.map((h) => h.name),
+                  habitColors,
+                  friendsList: friendIds,
+                  friendProfiles: friends,
+                },
+                dailyJournals: hydratedJournals,
+                weeklyReports: reports.map((r) =>
+                  normalizeWeeklyReport(r, profile.handle),
+                ),
+                individualEntries: entries.map((e) => ({
+                  ...e,
+                  date: e.entry_date || e.date || e.created_at,
+                  username: e.username || e.handle || profile.handle,
+                })),
+                feedPosts: [],
+              },
+            });
+
+            setFriendRequests({
+              incoming: incomingRequests,
+              outgoing: outgoingRequests,
+            });
+
+            void refreshFeedPosts(currentUser.id);
+          } catch (error) {
+            console.error("Error loading user data:", error);
+          }
+        } else {
+          setAuth({
+            user: null,
+            isAuthenticated: false,
+            hasAccount: loadedUsers.length > 0,
+            currentUsername: null,
+          });
+        }
+
+        setIsHydrated(true);
+      } catch (error) {
+        console.error("Error during hydration:", error);
+        setIsHydrated(true);
+      } finally {
+        setIsLoading(false);
       }
     };
 
     hydrate();
 
+    // Subscribe to auth state changes
+    const subscription = onAuthStateChange((user) => {
+      if (isMounted) {
+        if (user) {
+          setAuth({
+            user,
+            isAuthenticated: true,
+            hasAccount: true,
+            currentUsername: null,
+          });
+          // Reload data when user changes
+          hydrate();
+        } else {
+          setAuth({
+            user: null,
+            isAuthenticated: false,
+            hasAccount: publicUsers.length > 0,
+            currentUsername: null,
+          });
+          dispatch({ type: ACTIONS.RESET_STATE });
+          setFriendRequests({ incoming: [], outgoing: [] });
+        }
+      }
+    });
+
     return () => {
       isMounted = false;
+      subscription?.unsubscribe();
     };
   }, []);
 
-  useEffect(() => {
-    if (!isHydrated) return;
-    persistState(state);
-  }, [isHydrated, state]);
-
-  const publicUsers = useMemo(
-    () =>
-      usersDirectory.map((user) => ({
-        username: user.username,
-        firstName: user.firstName,
-        lastName: user.lastName,
-      })),
-    [usersDirectory],
-  );
-
-  const searchUsers = ({ query, excludeUsernames = [] }) => {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return [];
-
-    const excludeSet = new Set(
-      excludeUsernames.map((name) => name.toLowerCase()),
-    );
-
-    return publicUsers
-      .filter((user) => {
-        if (excludeSet.has(user.username)) return false;
-
-        const first = user.firstName.toLowerCase();
-        const last = user.lastName.toLowerCase();
-        const username = user.username.toLowerCase();
-
-        return (
-          first.includes(normalizedQuery) ||
-          last.includes(normalizedQuery) ||
-          username.includes(normalizedQuery)
-        );
-      })
-      .slice(0, 8);
-  };
-
-  const updateCurrentUserInDirectory = async (partialProfile) => {
-    const currentUsername = auth.currentUsername;
-    if (!currentUsername) return;
-
-    const nextUsersDirectory = usersDirectory.map((user) =>
-      user.username === currentUsername ? { ...user, ...partialProfile } : user,
-    );
-
-    setUsersDirectory(nextUsersDirectory);
-    await persistUsersDirectory(nextUsersDirectory);
-  };
-
   const actions = useMemo(
     () => ({
-      addDailyJournal: (payload) => {
-        const username = auth.currentUsername || state.userProfile.username;
-        dispatch({
-          type: ACTIONS.ADD_DAILY_JOURNAL,
-          payload: { ...payload, username, likes: [], comments: [] },
-        });
-      },
-      addWeeklyReport: (payload) => {
-        const username = auth.currentUsername || state.userProfile.username;
-        dispatch({
-          type: ACTIONS.ADD_WEEKLY_REPORT,
-          payload: { ...payload, username, likes: [], comments: [] },
-        });
-      },
-      toggleLikeOnDailyJournal: (journalDate, currentUsername) => {
-        const journal = state.dailyJournals.find((j) => j.date === journalDate);
-        if (!journal) return;
-        const likes = journal.likes || [];
-        const newLikes = likes.includes(currentUsername)
-          ? likes.filter((u) => u !== currentUsername)
-          : [...likes, currentUsername];
-        dispatch({
-          type: ACTIONS.UPDATE_DAILY_JOURNAL,
-          payload: { id: journalDate, updates: { likes: newLikes } },
-        });
-      },
-      toggleLikeOnWeeklyReport: (reportDate, currentUsername) => {
-        const report = state.weeklyReports.find((r) => r.date === reportDate);
-        if (!report) return;
-        const likes = report.likes || [];
-        const newLikes = likes.includes(currentUsername)
-          ? likes.filter((u) => u !== currentUsername)
-          : [...likes, currentUsername];
-        dispatch({
-          type: ACTIONS.UPDATE_WEEKLY_REPORT,
-          payload: { id: reportDate, updates: { likes: newLikes } },
-        });
-      },
-      addCommentOnDailyJournal: (journalDate, username, commentText) => {
-        const journal = state.dailyJournals.find((j) => j.date === journalDate);
-        if (!journal) return;
-        const comments = journal.comments || [];
-        const newComments = [
-          ...comments,
-          { username, text: commentText, date: new Date().toISOString() },
-        ];
-        dispatch({
-          type: ACTIONS.UPDATE_DAILY_JOURNAL,
-          payload: { id: journalDate, updates: { comments: newComments } },
-        });
-      },
-      addCommentOnWeeklyReport: (reportDate, username, commentText) => {
-        const report = state.weeklyReports.find((r) => r.date === reportDate);
-        if (!report) return;
-        const comments = report.comments || [];
-        const newComments = [
-          ...comments,
-          { username, text: commentText, date: new Date().toISOString() },
-        ];
-        dispatch({
-          type: ACTIONS.UPDATE_WEEKLY_REPORT,
-          payload: { id: reportDate, updates: { comments: newComments } },
-        });
-      },
-      addIndividualEntry: (payload) =>
-        dispatch({ type: ACTIONS.ADD_INDIVIDUAL_ENTRY, payload }),
-      updateHabits: async (payload) => {
-        const habitColors = buildHabitColorMap(
-          payload,
-          state.userProfile.habitColors || {},
-        );
-
-        dispatch({
-          type: ACTIONS.UPDATE_HABITS,
-          payload: { habitsList: payload, habitColors },
-        });
-        await updateCurrentUserInDirectory({
-          habitsList: payload,
-          habitColors,
-        });
-      },
-      updateFriends: async (payload) => {
-        const currentUsername = auth.currentUsername;
-        const previousFriends = state.userProfile.friendsList;
-        const removedFriends = previousFriends.filter(
-          (friend) => !payload.includes(friend),
-        );
-
-        let nextUsersDirectory = usersDirectory.map((user) => {
-          if (user.username === currentUsername) {
-            return { ...user, friendsList: payload };
-          }
-
-          if (removedFriends.includes(user.username)) {
-            return {
-              ...user,
-              friendsList: user.friendsList.filter(
-                (friend) => friend !== currentUsername,
-              ),
-            };
-          }
-
-          return user;
-        });
-
-        setUsersDirectory(nextUsersDirectory);
-        await persistUsersDirectory(nextUsersDirectory);
-        dispatch({ type: ACTIONS.UPDATE_FRIENDS, payload });
-      },
-      addFriendByUsername: async (friendUsernameInput) => {
-        const friendUsername = friendUsernameInput.trim().toLowerCase();
-        const currentUsername = state.userProfile.username;
-
-        if (!friendUsername) {
-          return { ok: false, error: "Enter a username." };
-        }
-
-        if (friendUsername === currentUsername) {
-          return { ok: false, error: "You cannot add yourself as a friend." };
-        }
-
-        const currentUser = usersDirectory.find(
-          (user) => user.username === currentUsername,
-        );
-        const friendUser = usersDirectory.find(
-          (user) => user.username === friendUsername,
-        );
-
-        if (!friendUser) {
-          return {
-            ok: false,
-            error: "That user does not exist in WYD yet.",
-          };
-        }
-
-        if (currentUser?.friendsList.includes(friendUsername)) {
-          return { ok: false, error: "You are already friends." };
-        }
-
-        if (currentUser?.outgoingFriendRequests.includes(friendUsername)) {
-          return { ok: false, error: "Friend request already sent." };
-        }
-
-        if (currentUser?.incomingFriendRequests.includes(friendUsername)) {
-          return {
-            ok: false,
-            error: "This user already requested you. Approve it below.",
-          };
-        }
-
-        const nextUsersDirectory = usersDirectory.map((user) => {
-          if (user.username === currentUsername) {
-            return {
-              ...user,
-              outgoingFriendRequests: [
-                ...user.outgoingFriendRequests,
-                friendUsername,
-              ],
-            };
-          }
-
-          if (user.username === friendUsername) {
-            return {
-              ...user,
-              incomingFriendRequests: [
-                ...user.incomingFriendRequests,
-                currentUsername,
-              ],
-            };
-          }
-
-          return user;
-        });
-
-        setUsersDirectory(nextUsersDirectory);
-        await persistUsersDirectory(nextUsersDirectory);
-        syncCurrentUserView(nextUsersDirectory, currentUsername);
-        return { ok: true };
-      },
-      approveFriendRequest: async (requesterUsername) => {
-        const currentUsername = state.userProfile.username;
-        const requester = requesterUsername.trim().toLowerCase();
-
-        const nextUsersDirectory = usersDirectory.map((user) => {
-          if (user.username === currentUsername) {
-            return {
-              ...user,
-              incomingFriendRequests: user.incomingFriendRequests.filter(
-                (name) => name !== requester,
-              ),
-              friendsList: user.friendsList.includes(requester)
-                ? user.friendsList
-                : [...user.friendsList, requester],
-            };
-          }
-
-          if (user.username === requester) {
-            return {
-              ...user,
-              outgoingFriendRequests: user.outgoingFriendRequests.filter(
-                (name) => name !== currentUsername,
-              ),
-              friendsList: user.friendsList.includes(currentUsername)
-                ? user.friendsList
-                : [...user.friendsList, currentUsername],
-            };
-          }
-
-          return user;
-        });
-
-        setUsersDirectory(nextUsersDirectory);
-        await persistUsersDirectory(nextUsersDirectory);
-        syncCurrentUserView(nextUsersDirectory, currentUsername);
-        return { ok: true };
-      },
-      declineFriendRequest: async (requesterUsername) => {
-        const currentUsername = state.userProfile.username;
-        const requester = requesterUsername.trim().toLowerCase();
-
-        const nextUsersDirectory = usersDirectory.map((user) => {
-          if (user.username === currentUsername) {
-            return {
-              ...user,
-              incomingFriendRequests: user.incomingFriendRequests.filter(
-                (name) => name !== requester,
-              ),
-            };
-          }
-
-          if (user.username === requester) {
-            return {
-              ...user,
-              outgoingFriendRequests: user.outgoingFriendRequests.filter(
-                (name) => name !== currentUsername,
-              ),
-            };
-          }
-
-          return user;
-        });
-
-        setUsersDirectory(nextUsersDirectory);
-        await persistUsersDirectory(nextUsersDirectory);
-        syncCurrentUserView(nextUsersDirectory, currentUsername);
-        return { ok: true };
-      },
-      clearAppData: async () => {
-        await clearAllStorage();
-        dispatch({ type: ACTIONS.RESET_STATE });
-        setUsersDirectory([]);
-        setFriendRequests({ incoming: [], outgoing: [] });
-        setAuth({
-          hasAccount: false,
-          isAuthenticated: false,
-          currentUsername: null,
-        });
-      },
+      /**
+       * ============================================
+       * AUTHENTICATION ACTIONS
+       * ============================================
+       */
       signUp: async ({
+        email,
+        password,
         firstName,
         lastName,
-        username,
-        password,
-        habitsList,
-        friendsList,
+        handle,
+        habitsList = [],
+        friendsList = [],
       }) => {
-        const normalizedUsername = username.trim().toLowerCase();
-        const normalizedPassword = password.trim();
-        const normalizedFirstName = firstName.trim();
-        const normalizedLastName = lastName.trim();
-        const normalizedHabits = [
-          ...new Set(habitsList.map((item) => item.trim()).filter(Boolean)),
-        ];
-        const normalizedFriends = [
-          ...new Set(
-            friendsList
-              .map((item) => item.trim().toLowerCase())
-              .filter(Boolean),
-          ),
-        ];
+        try {
+          if (!email || !password || !firstName || !lastName || !handle) {
+            return { ok: false, error: "Please complete all required fields." };
+          }
 
-        if (
-          !normalizedFirstName ||
-          !normalizedLastName ||
-          !normalizedUsername ||
-          !normalizedPassword
-        ) {
-          return { ok: false, error: "Please complete all required fields." };
-        }
-
-        if (
-          usersDirectory.some((user) => user.username === normalizedUsername)
-        ) {
-          return {
-            ok: false,
-            error: "Username already exists. Please choose another one.",
-          };
-        }
-
-        if (normalizedFriends.includes(normalizedUsername)) {
-          return { ok: false, error: "You cannot add yourself as a friend." };
-        }
-
-        const existingUsernames = new Set(
-          usersDirectory.map((user) => user.username),
-        );
-        const missingFriends = normalizedFriends.filter(
-          (friendUsername) => !existingUsernames.has(friendUsername),
-        );
-
-        if (missingFriends.length > 0) {
-          return {
-            ok: false,
-            error: `These users do not exist yet: ${missingFriends.join(", ")}.`,
-          };
-        }
-
-        const newUser = normalizeUserRecord({
-          firstName: normalizedFirstName,
-          lastName: normalizedLastName,
-          username: normalizedUsername,
-          password: normalizedPassword,
-          habitsList: normalizedHabits,
-          friendsList: [],
-          incomingFriendRequests: [],
-          outgoingFriendRequests: normalizedFriends,
-        });
-
-        const nextUsersDirectory = [...usersDirectory, newUser].map((user) => {
-          if (normalizedFriends.includes(user.username)) {
+          if (!isValidHandle(handle)) {
             return {
-              ...user,
-              incomingFriendRequests: [
-                ...new Set([
-                  ...user.incomingFriendRequests,
-                  normalizedUsername,
-                ]),
-              ],
+              ok: false,
+              error:
+                "Handle must be 3-30 characters, containing only lowercase letters, numbers, and underscores.",
             };
           }
 
-          return user;
-        });
-
-        await persistUsersDirectory(nextUsersDirectory);
-        setUsersDirectory(nextUsersDirectory);
-
-        dispatch({
-          type: ACTIONS.SET_PROFILE,
-          payload: {
-            firstName: normalizedFirstName,
-            lastName: normalizedLastName,
-            username: normalizedUsername,
-            habitsList: normalizedHabits,
-            habitColors: buildHabitColorMap(normalizedHabits),
-            friendsList: [],
-          },
-        });
-
-        setFriendRequests({
-          incoming: [],
-          outgoing: normalizedFriends,
-        });
-
-        setAuth({
-          hasAccount: true,
-          isAuthenticated: true,
-          currentUsername: normalizedUsername,
-        });
-        return { ok: true };
-      },
-      signIn: async ({ username, password }) => {
-        const normalizedUsername = username.trim().toLowerCase();
-        const normalizedPassword = password.trim();
-
-        if (usersDirectory.length === 0) {
-          return {
-            ok: false,
-            error: "No account found. Please sign up first.",
-          };
-        }
-
-        const matchedUser = usersDirectory.find(
-          (user) =>
-            user.username === normalizedUsername &&
-            user.password === normalizedPassword,
-        );
-
-        if (!matchedUser) {
-          return { ok: false, error: "Invalid username or password." };
-        }
-
-        syncCurrentUserView(usersDirectory, matchedUser.username);
-
-        setAuth({
-          hasAccount: true,
-          isAuthenticated: true,
-          currentUsername: matchedUser.username,
-        });
-        return { ok: true };
-      },
-      signOut: () => {
-        setAuth((prev) => ({
-          ...prev,
-          isAuthenticated: false,
-          currentUsername: null,
-        }));
-        setFriendRequests({ incoming: [], outgoing: [] });
-      },
-      seedTest3ChartData: async () => {
-        const targetUsername = "test3";
-        const targetUser = usersDirectory.find(
-          (user) => user.username === targetUsername,
-        );
-
-        if (!targetUser) {
-          return {
-            ok: false,
-            error: "User test3 does not exist. Create/sign up test3 first.",
-          };
-        }
-
-        const random = createSeededRandom(3007);
-        const now = new Date();
-        const candidateOffsets = [...Array(120)].map((_, index) => index);
-        const selectedOffsets = shuffle(candidateOffsets, random)
-          .slice(0, 100)
-          .sort((a, b) => a - b);
-
-        const highlightOptions = [
-          "Wrapped up a feature branch and felt focused.",
-          "Had a good workout after work.",
-          "Cooked dinner and called a friend.",
-          "Made progress on a long pending task.",
-          "Went on a long walk and cleared my head.",
-        ];
-        const smileOptions = [
-          "A friend sent a hilarious meme.",
-          "Barista remembered my order.",
-          "Saw a dog doing zoomies in the park.",
-          "Finished chores earlier than expected.",
-          "Found an old photo that made me laugh.",
-        ];
-        const gratefulOptions = [
-          "Good health and energy.",
-          "Supportive people around me.",
-          "Time to rest in the evening.",
-          "A calm morning with coffee.",
-          "Steady progress, even if small.",
-        ];
-        const proudOptions = [
-          "Stayed consistent with habits.",
-          "Handled stress better than usual.",
-          "Finished what I planned for the day.",
-          "Reached out and checked in on someone.",
-          "Showed up even when motivation was low.",
-        ];
-
-        const baseHabits =
-          targetUser.habitsList.length > 0
-            ? targetUser.habitsList
-            : ["Read", "Workout", "Hydrate", "Meditate", "Walk"];
-        const baseHabitColors = buildHabitColorMap(
-          baseHabits,
-          targetUser.habitColors || {},
-        );
-
-        const generatedEntries = selectedOffsets.map((offset, index) => {
-          const date = new Date(now);
-          date.setHours(20, 0, 0, 0);
-          date.setDate(now.getDate() - offset);
-
-          const seasonalWave = Math.sin(index / 9) * 1.2;
-          const randomDrift = (random() - 0.5) * 2.4;
-          const mood = clampMood(Math.round(4 + seasonalWave + randomDrift));
-          const completionRate = Math.max(
-            0.2,
-            Math.min(0.95, mood / 7 + random() * 0.25),
-          );
-          const habits = baseHabits.filter(() => random() < completionRate);
-
-          return {
-            username: targetUsername,
-            mood,
-            highlight: pickFrom(highlightOptions, random),
-            smile: pickFrom(smileOptions, random),
-            grateful: pickFrom(gratefulOptions, random),
-            proudestMoment: pickFrom(proudOptions, random),
-            habits,
-            public: random() > 0.28,
-            date: date.toISOString(),
-          };
-        });
-
-        const nonTest3Entries = state.dailyJournals.filter(
-          (entry) => entry.username !== targetUsername,
-        );
-
-        const nextDailyJournals = [
-          ...generatedEntries,
-          ...nonTest3Entries,
-        ].sort((a, b) => new Date(b.date) - new Date(a.date));
-
-        dispatch({
-          type: ACTIONS.SET_DAILY_JOURNALS,
-          payload: nextDailyJournals,
-        });
-
-        // Build individual entries (per-prompt) for the generated daily journals
-        const nonTest3IndividualEntries = state.individualEntries.filter(
-          (entry) => entry.username !== targetUsername,
-        );
-
-        const generatedIndividualEntries = generatedEntries.flatMap((entry) => {
-          const date = entry.date;
-          const items = [];
-          if (entry.highlight) {
-            items.push({
-              username: targetUsername,
-              type: "highlight",
-              content: entry.highlight,
-              date,
-            });
+          // Check if handle is already taken
+          const existingProfile = await DB.getProfileByHandle(handle);
+          if (existingProfile) {
+            return { ok: false, error: "This handle is already taken." };
           }
-          if (entry.smile) {
-            items.push({
-              username: targetUsername,
-              type: "smile",
-              content: entry.smile,
-              date,
-            });
+
+          // Sign up with Supabase Auth
+          const signedUpUser = await authSignUp({
+            email,
+            password,
+            firstName,
+            lastName,
+            handle: handle.toLowerCase(),
+          });
+
+          // Immediately sign in to ensure the client has an authenticated session
+          // so subsequent DB writes (habits, friend requests) succeed under RLS.
+          let user;
+          try {
+            user = await authSignIn({ email, password });
+          } catch (signinErr) {
+            // If sign-in fails, fall back to the signed up user object
+            user = signedUpUser;
           }
-          if (entry.grateful) {
-            items.push({
-              username: targetUsername,
-              type: "grateful",
-              content: entry.grateful,
-              date,
-            });
+
+          // Create habits if provided (now that client is signed in)
+          let habitsList_processed = [];
+          if (habitsList.length > 0) {
+            habitsList_processed = await Promise.all(
+              habitsList.map((habitName) =>
+                DB.createHabit(user.id, { name: habitName.trim() }),
+              ),
+            );
           }
-          if (entry.proudestMoment) {
-            items.push({
-              username: targetUsername,
-              type: "proudestMoment",
-              content: entry.proudestMoment,
-              date,
-            });
-          }
-          return items;
-        });
 
-        const nextIndividualEntries = [
-          ...generatedIndividualEntries,
-          ...nonTest3IndividualEntries,
-        ].sort((a, b) => new Date(b.date) - new Date(a.date));
+          setAuth({
+            user,
+            isAuthenticated: true,
+            hasAccount: true,
+            currentUsername: handle.toLowerCase(),
+          });
 
-        dispatch({
-          type: ACTIONS.SET_INDIVIDUAL_ENTRIES,
-          payload: nextIndividualEntries,
-        });
-
-        const shouldSyncUserRecord =
-          targetUser.habitsList.length === 0 ||
-          Object.keys(targetUser.habitColors || {}).length !==
-            baseHabits.length;
-
-        let nextUsersDirectory = usersDirectory;
-        if (shouldSyncUserRecord) {
-          nextUsersDirectory = usersDirectory.map((user) =>
-            user.username === targetUsername
-              ? {
-                  ...user,
-                  habitsList: baseHabits,
-                  habitColors: baseHabitColors,
-                }
-              : user,
+          const habitColors = buildHabitColorMap(
+            habitsList_processed.map((h) => h.name),
+            {},
           );
 
-          setUsersDirectory(nextUsersDirectory);
-          await persistUsersDirectory(nextUsersDirectory);
-        }
-
-        if (auth.currentUsername === targetUsername) {
           dispatch({
             type: ACTIONS.SET_PROFILE,
             payload: {
-              firstName: targetUser.firstName,
-              lastName: targetUser.lastName,
-              username: targetUser.username,
-              habitsList: baseHabits,
-              habitColors: baseHabitColors,
-              friendsList: targetUser.friendsList,
+              id: user.id,
+              email: user.email,
+              handle: handle.toLowerCase(),
+              username: handle.toLowerCase(),
+              firstName,
+              lastName,
+              avatarUrl: null,
+              habitsList: habitsList_processed.map((h) => h.name),
+              habitColors,
+              friendsList: [],
+              friendProfiles: [],
             },
           });
+
+          setFriendRequests({
+            incoming: [],
+            outgoing: [],
+          });
+
+          // Send friend requests if any were selected during signup
+          if (friendsList.length > 0) {
+            try {
+              console.log("[signUp] Sending friend requests to:", friendsList);
+              const outgoingRequests = await Promise.all(
+                friendsList.map(async (friendHandle) => {
+                  try {
+                    // Look up the friend's user ID from their handle
+                    const friendProfile =
+                      await DB.getProfileByHandle(friendHandle);
+                    if (!friendProfile) {
+                      console.warn("[signUp] Friend not found:", friendHandle);
+                      return null;
+                    }
+                    console.log(
+                      "[signUp] Sending request to",
+                      friendHandle,
+                      "with ID",
+                      friendProfile.id,
+                    );
+                    const request = await DB.sendFriendRequest(
+                      user.id,
+                      friendProfile.id,
+                    );
+                    console.log("[signUp] Friend request sent:", request);
+                    return request;
+                  } catch (error) {
+                    console.error(
+                      "[signUp] Error sending request to",
+                      friendHandle,
+                      ":",
+                      error,
+                    );
+                    return null;
+                  }
+                }),
+              );
+              const validRequests = outgoingRequests.filter(Boolean);
+              console.log(
+                "[signUp] Total friend requests sent:",
+                validRequests.length,
+              );
+              setFriendRequests({
+                incoming: [],
+                outgoing: validRequests,
+              });
+              // Refresh friend requests from DB to ensure real-time sync
+              void refreshFriendRequests(user.id);
+            } catch (error) {
+              console.error(
+                "[signUp] Error in friend requests process:",
+                error,
+              );
+            }
+          }
+
+          void refreshFeedPosts(user.id);
+
+          return { ok: true };
+        } catch (error) {
+          console.error("Sign up error:", error);
+          return {
+            ok: false,
+            error: error.message || "Sign up failed. Please try again.",
+          };
+        }
+      },
+
+      signIn: async ({ email, password }) => {
+        try {
+          if (!email || !password) {
+            return { ok: false, error: "Please enter email and password." };
+          }
+
+          const user = await authSignIn({ email, password });
+
+          // Fetch user data
+          const [
+            profile,
+            habits,
+            journals,
+            reports,
+            entries,
+            incomingRequests,
+            outgoingRequests,
+          ] = await Promise.all([
+            DB.getProfile(user.id),
+            DB.getUserHabits(user.id),
+            DB.getUserDailyJournals(user.id),
+            DB.getUserWeeklyReports(user.id),
+            DB.getUserIndividualEntries(user.id),
+            DB.getIncomingFriendRequests(user.id),
+            DB.getOutgoingFriendRequests(user.id),
+          ]);
+
+          const friends = await DB.getFriends(user.id);
+          const friendIds = friends.map((f) => f.id);
+
+          const habitColors = buildHabitColorMap(
+            habits.map((h) => h.name),
+            {},
+          );
+
+          const hydratedJournals = await hydrateDailyJournalsWithHabits(
+            journals,
+            profile.handle,
+          );
+
+          dispatch({
+            type: ACTIONS.HYDRATE_STATE,
+            payload: {
+              userProfile: {
+                id: user.id,
+                email: profile.email,
+                handle: profile.handle,
+                username: profile.handle,
+                firstName: profile.first_name,
+                lastName: profile.last_name,
+                avatarUrl: profile.avatar_url,
+                habitsList: habits.map((h) => h.name),
+                habitColors,
+                friendsList: friendIds,
+                friendProfiles: friends,
+              },
+              dailyJournals: hydratedJournals,
+              weeklyReports: reports.map((r) =>
+                normalizeWeeklyReport(r, profile.handle),
+              ),
+              individualEntries: entries.map((e) =>
+                normalizeIndividualEntry(e, profile.handle),
+              ),
+              feedPosts: [],
+            },
+          });
+
+          setFriendRequests({
+            incoming: incomingRequests,
+            outgoing: outgoingRequests,
+          });
+
+          setAuth({
+            user,
+            isAuthenticated: true,
+            hasAccount: true,
+            currentUsername: profile.handle,
+          });
+
+          void refreshFeedPosts(user.id);
+
+          return { ok: true };
+        } catch (error) {
+          console.error("Sign in error:", error);
+          return {
+            ok: false,
+            error: error.message || "Invalid email or password.",
+          };
+        }
+      },
+
+      signOut: async () => {
+        try {
+          await authSignOut();
+          setAuth({
+            user: null,
+            isAuthenticated: false,
+            hasAccount: publicUsers.length > 0,
+            currentUsername: null,
+          });
+          dispatch({ type: ACTIONS.RESET_STATE });
+          setFriendRequests({ incoming: [], outgoing: [] });
+          return { ok: true };
+        } catch (error) {
+          console.error("Sign out error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      /**
+       * ============================================
+       * JOURNAL ACTIONS
+       * ============================================
+       */
+      addDailyJournal: async ({
+        entryDate,
+        date,
+        mood,
+        highlight,
+        smile,
+        grateful,
+        proudestMoment,
+        habits = [],
+        isPublic = true,
+        public: publicFlag,
+      }) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          const resolvedEntryDate = entryDate || date;
+          const resolvedIsPublic =
+            publicFlag === undefined ? isPublic : publicFlag;
+
+          const journal = await DB.createDailyJournal(auth.user.id, {
+            entryDate: resolvedEntryDate,
+            mood: clampMood(mood),
+            highlight,
+            smile,
+            grateful,
+            proudestMoment,
+            isPublic: resolvedIsPublic,
+          });
+
+          const userHabits = await DB.getUserHabits(auth.user.id);
+          const habitIdByName = new Map(
+            userHabits.map((habit) => [habit.name, habit.id]),
+          );
+
+          await Promise.all(
+            normalizeHabitNames(habits)
+              .map((habitName) => habitIdByName.get(habitName))
+              .filter(Boolean)
+              .map((habitId) => DB.addHabitToJournal(journal.id, habitId)),
+          );
+
+          dispatch({
+            type: ACTIONS.ADD_DAILY_JOURNAL,
+            payload: normalizeDailyJournal(
+              { ...journal, habits },
+              state.userProfile.username || state.userProfile.handle,
+            ),
+          });
+
+          return { ok: true, data: journal };
+        } catch (error) {
+          console.error("Add daily journal error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      updateDailyJournal: async (journalId, updates) => {
+        try {
+          const updated = await DB.updateDailyJournal(journalId, updates);
+
+          if (updates?.habits) {
+            const userHabits = await DB.getUserHabits(auth.user.id);
+            const habitIdByName = new Map(
+              userHabits.map((habit) => [habit.name, habit.id]),
+            );
+            const selectedHabitIds = normalizeHabitNames(updates.habits)
+              .map((habitName) => habitIdByName.get(habitName))
+              .filter(Boolean);
+            const currentJournalHabits = await DB.getJournalHabits(journalId);
+            const currentHabitIds = new Set(
+              currentJournalHabits.map((habit) => habit?.id).filter(Boolean),
+            );
+
+            await Promise.all(
+              [...currentHabitIds]
+                .filter((habitId) => !selectedHabitIds.includes(habitId))
+                .map((habitId) =>
+                  DB.removeHabitFromJournal(journalId, habitId),
+                ),
+            );
+
+            await Promise.all(
+              selectedHabitIds
+                .filter((habitId) => !currentHabitIds.has(habitId))
+                .map((habitId) => DB.addHabitToJournal(journalId, habitId)),
+            );
+          }
+
+          dispatch({
+            type: ACTIONS.UPDATE_DAILY_JOURNAL,
+            payload: {
+              id: journalId,
+              updates: normalizeDailyJournal(
+                {
+                  ...updated,
+                  habits: normalizeHabitNames(updates.habits),
+                },
+                state.userProfile.username || state.userProfile.handle,
+              ),
+            },
+          });
+
+          void refreshFeedPosts(auth.user.id);
+
+          return { ok: true, data: updated };
+        } catch (error) {
+          console.error("Update daily journal error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      deleteDailyJournal: async (journalId) => {
+        try {
+          await DB.deleteDailyJournal(journalId);
+          dispatch({
+            type: ACTIONS.DELETE_DAILY_JOURNAL,
+            payload: { id: journalId },
+          });
+          void refreshFeedPosts(auth.user.id);
+          return { ok: true };
+        } catch (error) {
+          console.error("Delete daily journal error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      addWeeklyReport: async (payload) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          const resolvedWeekStart =
+            payload?.weekStart ||
+            payload?.week_start ||
+            payload?.date ||
+            payload?.entryDate ||
+            payload?.entry_date ||
+            null;
+
+          const read = payload?.read;
+          const eat = payload?.eat;
+          const play = payload?.play;
+          const obsess = payload?.obsess;
+          const recommend = payload?.recommend;
+          const treat = payload?.treat;
+          const isPublic = payload?.isPublic ?? payload?.public ?? true;
+
+          const report = await DB.createWeeklyReport(auth.user.id, {
+            weekStart: resolvedWeekStart,
+            read,
+            eat,
+            play,
+            obsess,
+            recommend,
+            treat,
+            isPublic,
+          });
+
+          dispatch({
+            type: ACTIONS.ADD_WEEKLY_REPORT,
+            payload: normalizeWeeklyReport(
+              report,
+              state.userProfile.username || state.userProfile.handle,
+            ),
+          });
+
+          void refreshFeedPosts(auth.user.id);
+
+          return { ok: true, data: report };
+        } catch (error) {
+          console.error("Add weekly report error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      updateWeeklyReport: async (reportId, updates) => {
+        try {
+          const updated = await DB.updateWeeklyReport(reportId, updates);
+
+          dispatch({
+            type: ACTIONS.UPDATE_WEEKLY_REPORT,
+            payload: { id: reportId, updates: updated },
+          });
+
+          void refreshFeedPosts(auth.user.id);
+
+          return { ok: true, data: updated };
+        } catch (error) {
+          console.error("Update weekly report error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      deleteWeeklyReport: async (reportId) => {
+        try {
+          await DB.deleteWeeklyReport(reportId);
+          dispatch({
+            type: ACTIONS.DELETE_WEEKLY_REPORT,
+            payload: { id: reportId },
+          });
+          void refreshFeedPosts(auth.user.id);
+          return { ok: true };
+        } catch (error) {
+          console.error("Delete weekly report error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      addIndividualEntry: async ({
+        entryType,
+        type,
+        content,
+        entryDate,
+        date,
+        journalId = null,
+      }) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          const resolvedEntryType = entryType || type;
+          const resolvedEntryDate = entryDate || date;
+
+          const entry = await DB.createIndividualEntry(auth.user.id, {
+            entryType: resolvedEntryType,
+            content,
+            entryDate: resolvedEntryDate,
+            journalId,
+          });
+
+          dispatch({
+            type: ACTIONS.ADD_INDIVIDUAL_ENTRY,
+            payload: normalizeIndividualEntry(
+              entry,
+              state.userProfile.username,
+            ),
+          });
+
+          return { ok: true, data: entry };
+        } catch (error) {
+          console.error("Add individual entry error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      /**
+       * ============================================
+       * HABITS ACTIONS
+       * ============================================
+       */
+      updateHabits: async (habitsList) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          // For now, we'll just update the UI state
+          // In a real implementation, you'd update habits in Supabase
+          const habitColors = buildHabitColorMap(
+            habitsList,
+            state.userProfile.habitColors || {},
+          );
+
+          dispatch({
+            type: ACTIONS.UPDATE_HABITS,
+            payload: { habitsList, habitColors },
+          });
+
+          return { ok: true };
+        } catch (error) {
+          console.error("Update habits error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      addFriendByUsername: async (friendHandle) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          const normalizedHandle = friendHandle.trim().toLowerCase();
+
+          if (normalizedHandle === state.userProfile.handle) {
+            return { ok: false, error: "You cannot add yourself as a friend." };
+          }
+
+          const friendProfile = await DB.getProfileByHandle(normalizedHandle);
+          if (!friendProfile) {
+            return { ok: false, error: "User not found." };
+          }
+
+          const isFriends = await DB.areFriends(auth.user.id, friendProfile.id);
+          if (isFriends) {
+            return { ok: false, error: "You are already friends." };
+          }
+
+          const request = await DB.sendFriendRequest(
+            auth.user.id,
+            friendProfile.id,
+          );
+
+          // Refresh friend requests in real-time
+          await refreshFriendRequests(auth.user.id);
+
+          return { ok: true };
+        } catch (error) {
+          console.error("Add friend error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      /**
+       * ============================================
+       * FRIENDS ACTIONS
+       * ============================================
+       */
+      addFriendByHandle: async (friendHandle) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          const normalizedHandle = friendHandle.trim().toLowerCase();
+
+          if (normalizedHandle === state.userProfile.handle) {
+            return { ok: false, error: "You cannot add yourself as a friend." };
+          }
+
+          const friendProfile = await DB.getProfileByHandle(normalizedHandle);
+          if (!friendProfile) {
+            return { ok: false, error: "User not found." };
+          }
+
+          // Check if already friends
+          const isFriends = await DB.areFriends(auth.user.id, friendProfile.id);
+          if (isFriends) {
+            return { ok: false, error: "You are already friends." };
+          }
+
+          // Send friend request
+          const request = await DB.sendFriendRequest(
+            auth.user.id,
+            friendProfile.id,
+          );
+
+          // Refresh friend requests in real-time
+          await refreshFriendRequests(auth.user.id);
+
+          return { ok: true };
+        } catch (error) {
+          console.error("Add friend error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      approveFriendRequest: async (friendRequestId) => {
+        try {
+          await DB.acceptFriendRequest(friendRequestId);
+
+          // Reload friends
+          const friends = await DB.getFriends(auth.user.id);
+          const friendIds = friends.map((f) => f.id);
+
+          dispatch({
+            type: ACTIONS.UPDATE_FRIENDS,
+            payload: friendIds,
+          });
+
+          dispatch({
+            type: ACTIONS.HYDRATE_STATE,
+            payload: {
+              userProfile: {
+                ...state.userProfile,
+                friendsList: friendIds,
+                friendProfiles: friends,
+              },
+            },
+          });
+
+          // Reload all friend requests in real-time
+          await refreshFriendRequests(auth.user.id);
+
+          return { ok: true };
+        } catch (error) {
+          console.error("Approve friend request error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      declineFriendRequest: async (friendRequestId) => {
+        try {
+          await DB.declineFriendRequest(friendRequestId);
+
+          // Reload all friend requests in real-time
+          await refreshFriendRequests(auth.user.id);
+
+          return { ok: true };
+        } catch (error) {
+          console.error("Decline friend request error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      /**
+       * ============================================
+       * LIKES & COMMENTS ACTIONS
+       * ============================================
+       */
+      toggleLikeOnDailyJournal: async (journalId) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          await DB.toggleDailyJournalLike(
+            resolveDailyJournalId(journalId),
+            auth.user.id,
+          );
+          await refreshFeedPosts(auth.user.id);
+          return { ok: true };
+        } catch (error) {
+          console.error("Toggle like error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      toggleLikeOnWeeklyReport: async (reportId) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          await DB.toggleWeeklyReportLike(
+            resolveWeeklyReportId(reportId),
+            auth.user.id,
+          );
+          await refreshFeedPosts(auth.user.id);
+          return { ok: true };
+        } catch (error) {
+          console.error("Toggle like error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      addCommentOnDailyJournal: async (journalId, commentText) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          const comment = await DB.addDailyJournalComment(
+            resolveDailyJournalId(journalId),
+            auth.user.id,
+            commentText,
+          );
+          await refreshFeedPosts(auth.user.id);
+          return { ok: true, data: comment };
+        } catch (error) {
+          console.error("Add comment error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      addCommentOnWeeklyReport: async (reportId, commentText) => {
+        try {
+          if (!auth.user) {
+            return { ok: false, error: "User not authenticated" };
+          }
+
+          const comment = await DB.addWeeklyReportComment(
+            resolveWeeklyReportId(reportId),
+            auth.user.id,
+            commentText,
+          );
+          await refreshFeedPosts(auth.user.id);
+          return { ok: true, data: comment };
+        } catch (error) {
+          console.error("Add comment error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      /**
+       * ============================================
+       * UTILITY ACTIONS
+       * ============================================
+       */
+      clearAppData: async () => {
+        try {
+          await authSignOut();
+          setAuth({
+            user: null,
+            isAuthenticated: false,
+          });
+          dispatch({ type: ACTIONS.RESET_STATE });
+          setFriendRequests({ incoming: [], outgoing: [] });
+          return { ok: true };
+        } catch (error) {
+          console.error("Clear app data error:", error);
+          return { ok: false, error: error.message };
+        }
+      },
+
+      searchUsers: async (input) => {
+        const query = typeof input === "string" ? input : input?.query || "";
+        const excludeUsernames =
+          typeof input === "object" && input !== null
+            ? input.excludeUsernames || []
+            : [];
+
+        if (!query || query.trim().length === 0) {
+          return [];
         }
 
-        return {
-          ok: true,
-          count: generatedEntries.length,
-          daysWindow: 120,
-          skippedDays: 20,
-        };
+        try {
+          // Query database directly for fresh results
+          const profiles = await DB.searchProfiles(query, 8);
+          console.log(
+            "[searchUsers] DB query returned:",
+            profiles.length,
+            "profiles",
+          );
+          const normalizedExclude = excludeUsernames.map((name) =>
+            (name || "").toLowerCase(),
+          );
+
+          const filtered = profiles
+            .map((profile) => ({
+              handle: profile.handle,
+              firstName: profile.first_name,
+              lastName: profile.last_name,
+              username: profile.handle,
+            }))
+            .filter(
+              (user) =>
+                !normalizedExclude.includes((user.handle || "").toLowerCase()),
+            )
+            .slice(0, 8);
+
+          console.log(
+            "[searchUsers] After filtering, returning:",
+            filtered.length,
+            "results",
+          );
+          return filtered;
+        } catch (error) {
+          console.error(
+            "[searchUsers] DB error, falling back to publicUsers:",
+            error,
+          );
+          // Fallback to publicUsers
+          const normalizedQuery = query.trim().toLowerCase();
+          console.log("[searchUsers] publicUsers count:", publicUsers.length);
+          const fallbackResults = publicUsers
+            .filter((user) => {
+              const firstName = (user.firstName || "").toLowerCase();
+              const lastName = (user.lastName || "").toLowerCase();
+              const handle = (user.handle || user.username || "").toLowerCase();
+              const excluded = excludeUsernames.some(
+                (name) => (name || "").toLowerCase() === handle,
+              );
+
+              if (excluded) return false;
+
+              return (
+                firstName.includes(normalizedQuery) ||
+                lastName.includes(normalizedQuery) ||
+                handle.includes(normalizedQuery)
+              );
+            })
+            .slice(0, 8);
+
+          console.log(
+            "[searchUsers] Fallback returning:",
+            fallbackResults.length,
+            "results",
+          );
+          return fallbackResults;
+        }
       },
     }),
-    [
-      auth.currentUsername,
-      state.dailyJournals,
-      state.userProfile.friendsList,
-      state.userProfile.habitColors,
-      state.userProfile.username,
-      usersDirectory,
-    ],
+    [publicUsers, state.userProfile],
   );
 
   const value = useMemo(
     () => ({
       state,
       isHydrated,
+      isLoading,
       auth,
       friendRequests,
-      existingUsernames: usersDirectory.map((user) => user.username),
-      searchUsers,
       ...actions,
     }),
-    [actions, auth, friendRequests, isHydrated, state, usersDirectory],
+    [actions, auth, friendRequests, isHydrated, isLoading, state],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

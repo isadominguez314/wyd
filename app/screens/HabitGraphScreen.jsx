@@ -5,6 +5,7 @@ import ScreenContainer from "../components/ScreenContainer";
 import SectionCard from "../components/SectionCard";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
+import { parseLocalDate } from "../utils/dateUtils";
 
 const ranges = {
   "3mo": 90,
@@ -34,7 +35,7 @@ const withAlpha = (hex, alpha) => {
 };
 
 const getWeekStart = (dateInput) => {
-  const date = new Date(dateInput);
+  const date = parseLocalDate(dateInput);
   date.setHours(0, 0, 0, 0);
   const mondayBasedDay = (date.getDay() + 6) % 7;
   date.setDate(date.getDate() - mondayBasedDay);
@@ -78,10 +79,10 @@ const HabitGraphScreen = () => {
     return journalsForUser
       .filter((entry) => {
         if (!daysLimit) return true;
-        const diff = now.getTime() - new Date(entry.date).getTime();
+        const diff = now.getTime() - parseLocalDate(entry.date).getTime();
         return diff <= daysLimit * 24 * 60 * 60 * 1000;
       })
-      .sort((a, b) => new Date(a.date) - new Date(b.date));
+      .sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date));
   }, [journalsForUser, range]);
 
   const weeklyBuckets = useMemo(() => {

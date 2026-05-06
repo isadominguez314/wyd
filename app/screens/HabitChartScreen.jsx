@@ -4,16 +4,9 @@ import ScreenContainer from "../components/ScreenContainer";
 import SectionCard from "../components/SectionCard";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
+import { parseLocalDate, toLocalDateKey } from "../utils/dateUtils";
 
 const formatDay = (date) => `${date.getMonth() + 1}/${date.getDate()}`;
-
-const toLocalDateKey = (dateInput) => {
-  const date = new Date(dateInput);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
 
 const HabitChartScreen = () => {
   const { state } = useAppContext();
@@ -43,7 +36,7 @@ const HabitChartScreen = () => {
       if (!previous || new Date(entry.date) > previous.timestamp) {
         map.set(key, {
           habits: entry.habits || [],
-          timestamp: new Date(entry.date),
+          timestamp: parseLocalDate(entry.date),
         });
       }
     });

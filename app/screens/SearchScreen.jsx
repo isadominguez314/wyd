@@ -1,10 +1,21 @@
 import React, { useMemo, useState } from "react";
-import { View, Text, TextInput, StyleSheet, Pressable } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  StyleSheet,
+  Pressable,
+  Alert,
+} from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import ScreenContainer from "../components/ScreenContainer";
 import SectionCard from "../components/SectionCard";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
 import { moodLabels, moodOptions } from "../utils/moodLabels";
+import { formatLocalDate } from "../utils/dateUtils";
+import * as DB from "../storage/supabaseService";
+import { useNavigation } from "@react-navigation/native";
 
 const FILTERS = {
   ALL: "all",
@@ -40,6 +51,8 @@ const entryTypeLabels = {
   proudestMoment: "Proudest Moment",
 };
 
+const getIndividualEntryType = (entry) => entry.type || entry.entry_type || "";
+
 const dailyFields = ["highlight", "smile", "grateful", "proudestMoment"];
 const weeklyFields = ["read", "eat", "play", "obsess", "recommend", "treat"];
 const subEntryFilters = [
@@ -73,7 +86,7 @@ const getWeeklyFieldValue = (report, key) => {
 const matchesAnyField = (item, fields, normalizedQuery) => {
   if (normalizedQuery.length === 0) return true;
 
-  const dateText = new Date(item.date).toLocaleDateString().toLowerCase();
+  const dateText = formatLocalDate(item.date).toLowerCase();
   const joined = fields
     .map((field) => (item[field] || "").toLowerCase())
     .join(" ");
@@ -81,13 +94,23 @@ const matchesAnyField = (item, fields, normalizedQuery) => {
   return joined.includes(normalizedQuery) || dateText.includes(normalizedQuery);
 };
 
-const SearchScreen = () => {
-  const { state } = useAppContext();
+const SearchScreen = ({ route }) => {
+  const navigation = useNavigation();
+  const { state, deleteDailyJournal, deleteWeeklyReport } = useAppContext();
   const currentUsername = state.userProfile?.username;
   const [query, setQuery] = useState("");
   const [selectedFilters, setSelectedFilters] = useState([FILTERS.ALL]);
   const [selectedMoods, setSelectedMoods] = useState([]);
   const [expandedCards, setExpandedCards] = useState({});
+  const [interactionCache, setInteractionCache] = useState({});
+
+  // Apply initial filter from navigation params (e.g., from HomeScreen)
+  React.useEffect(() => {
+    const initialFilter = route?.params?.initialFilter;
+    if (initialFilter && initialFilter !== FILTERS.ALL) {
+      setSelectedFilters([initialFilter]);
+    }
+  }, [route?.params?.initialFilter]);
 
   const hasAll = selectedFilters.includes(FILTERS.ALL);
   const hasDaily = selectedFilters.includes(FILTERS.DAILY) || hasAll;
@@ -162,6 +185,88 @@ const SearchScreen = () => {
     }));
   };
 
+  const loadInteractions = async (result) => {
+    if (!result?.sourceId || interactionCache[result.sourceId]) return;
+
+    try {
+      const [likes, comments] = result.isDailyJournal
+        ? await Promise.all([
+            DB.getDailyJournalLikes(result.sourceId),
+            DB.getDailyJournalComments(result.sourceId),
+          ])
+        : await Promise.all([
+            DB.getWeeklyReportLikes(result.sourceId),
+            DB.getWeeklyReportComments(result.sourceId),
+          ]);
+
+      setInteractionCache((prev) => ({
+        ...prev,
+        [result.sourceId]: { likes, comments },
+      }));
+    } catch (error) {
+      console.error("Error loading search interactions:", error);
+    }
+  };
+
+  const toggleExpandedAndLoad = async (result) => {
+    const nextExpanded = !expandedCards[result.id];
+    toggleExpanded(result.id);
+
+    if (nextExpanded) {
+      await loadInteractions(result);
+    }
+  };
+
+  const getInteractionData = (result) =>
+    interactionCache[result.sourceId] || {
+      likes: result.likes || [],
+      comments: result.comments || [],
+    };
+
+  const openEditor = (result) => {
+    if (result.isDailyJournal) {
+      navigation.navigate("JournalScreen", {
+        journal: result.sourceEntry || result,
+      });
+      return;
+    }
+
+    if (result.isWeeklyReport) {
+      navigation.navigate("WeeklyReportScreen", {
+        report: result.sourceEntry || result,
+      });
+    }
+  };
+
+  const confirmDelete = (result) => {
+    const label = result.isDailyJournal ? "daily journal" : "weekly report";
+
+    Alert.alert(
+      "Delete entry?",
+      `Delete this ${label}? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const action = result.isDailyJournal
+              ? deleteDailyJournal
+              : deleteWeeklyReport;
+            const deleteResult = await action(result.sourceId || result.id);
+
+            if (!deleteResult?.ok) {
+              Alert.alert(
+                "Delete failed",
+                deleteResult?.error || "Could not delete the entry.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const results = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     const cards = [];
@@ -179,6 +284,8 @@ const SearchScreen = () => {
       filteredDaily.forEach((journal, index) => {
         cards.push({
           id: `journal-${journal.date}-${index}`,
+          sourceId: journal.id,
+          sourceEntry: journal,
           category: "Daily Journal",
           isDailyJournal: true,
           date: journal.date,
@@ -190,7 +297,10 @@ const SearchScreen = () => {
             { label: "Highlight", value: journal.highlight },
             { label: "Smile", value: journal.smile },
             { label: "Grateful", value: journal.grateful },
-            { label: "Proudest", value: journal.proudestMoment },
+            {
+              label: "Proudest",
+              value: journal.proudestMoment || journal.proudest_moment,
+            },
           ],
         });
       });
@@ -200,9 +310,7 @@ const SearchScreen = () => {
       const filteredWeekly = state.weeklyReports.filter((report) => {
         if (normalized.length === 0) return true;
 
-        const dateText = new Date(report.date)
-          .toLocaleDateString()
-          .toLowerCase();
+        const dateText = formatLocalDate(report.date).toLowerCase();
         const weeklyText = weeklyFields
           .map((field) => getWeeklyFieldValue(report, field))
           .join(" ")
@@ -229,6 +337,8 @@ const SearchScreen = () => {
 
         cards.push({
           id: `weekly-${report.date}-${index}`,
+          sourceId: report.id,
+          sourceEntry: report,
           category: "Weekly Report",
           isWeeklyReport: true,
           date: report.date,
@@ -253,19 +363,21 @@ const SearchScreen = () => {
       );
 
       const filteredEntries = state.individualEntries.filter((entry) => {
-        const typePass = allowedTypes.includes(entry.type);
+        const entryType = getIndividualEntryType(entry);
+        const typePass = allowedTypes.includes(entryType);
         const queryPass =
           normalized.length === 0 ||
           entry.content.toLowerCase().includes(normalized) ||
-          entry.type.toLowerCase().includes(normalized);
+          entryType.toLowerCase().includes(normalized);
 
         return typePass && queryPass;
       });
 
       filteredEntries.forEach((entry, index) => {
+        const entryType = getIndividualEntryType(entry);
         cards.push({
-          id: `entry-${entry.date}-${entry.type}-${index}`,
-          category: entryTypeLabels[entry.type] || entry.type,
+          id: `entry-${entry.date}-${entryType}-${index}`,
+          category: entryTypeLabels[entryType] || entryType,
           date: entry.date,
           preview: entry.content,
           details: [],
@@ -375,24 +487,54 @@ const SearchScreen = () => {
                 key={result.id}
                 style={styles.resultRow}
                 onPress={() =>
-                  result.isIndividualEntry ? null : toggleExpanded(result.id)
+                  result.isIndividualEntry
+                    ? null
+                    : toggleExpandedAndLoad(result)
                 }
               >
-                <Text
-                  style={[
-                    styles.type,
-                    result.isDailyJournal && result.mood
-                      ? {
-                          backgroundColor: theme.moodColors[result.mood],
-                          color: theme.colors.text,
-                        }
-                      : styles.typeYellow,
-                  ]}
-                >
-                  {result.isWeeklyReport
-                    ? `Weekly Report ${new Date(result.date).toLocaleDateString()}`
-                    : result.category}
-                </Text>
+                <View style={styles.resultHeaderRow}>
+                  <Text
+                    style={[
+                      styles.type,
+                      result.isDailyJournal && result.mood
+                        ? {
+                            backgroundColor: theme.moodColors[result.mood],
+                            color: theme.colors.text,
+                          }
+                        : styles.typeYellow,
+                    ]}
+                  >
+                    {result.isWeeklyReport
+                      ? `Weekly Report ${formatLocalDate(result.date)}`
+                      : result.category}
+                  </Text>
+                  {result.isDailyJournal || result.isWeeklyReport ? (
+                    <View style={styles.headerActions}>
+                      <Pressable
+                        style={styles.iconAction}
+                        onPress={() => openEditor(result)}
+                        hitSlop={8}
+                      >
+                        <MaterialCommunityIcons
+                          name="pencil-outline"
+                          size={18}
+                          color={theme.colors.mutedText}
+                        />
+                      </Pressable>
+                      <Pressable
+                        style={styles.iconAction}
+                        onPress={() => confirmDelete(result)}
+                        hitSlop={8}
+                      >
+                        <MaterialCommunityIcons
+                          name="trash-can-outline"
+                          size={18}
+                          color={theme.colors.mutedText}
+                        />
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </View>
 
                 {result.isWeeklyReport ? (
                   <>
@@ -420,7 +562,7 @@ const SearchScreen = () => {
                       })}
                     </Text>
                     <Text style={styles.date}>
-                      {new Date(result.date).toLocaleDateString()}
+                      {formatLocalDate(result.date)}
                       {expanded ? "  • Collapse" : "  • Expand"}
                     </Text>
                   </>
@@ -428,7 +570,7 @@ const SearchScreen = () => {
                   <>
                     <Text style={styles.content}>{result.preview}</Text>
                     <Text style={styles.date}>
-                      {new Date(result.date).toLocaleDateString()}
+                      {formatLocalDate(result.date)}
                       {result.isIndividualEntry
                         ? ""
                         : expanded
@@ -458,32 +600,45 @@ const SearchScreen = () => {
 
                 {!result.isIndividualEntry && expanded ? (
                   <View style={styles.interactionBlock}>
-                    <Text style={styles.interactionLine}>
-                      <Text style={styles.interactionLabel}>Likes:</Text>{" "}
-                      {(result.likes || []).length}
-                      {(result.likes || []).length > 0
-                        ? ` (${result.likes.join(", ")})`
-                        : ""}
-                    </Text>
+                    {(() => {
+                      const interactionData = getInteractionData(result);
+                      const likeNames = (interactionData.likes || [])
+                        .map((like) => like.profiles?.handle)
+                        .filter(Boolean);
 
-                    <Text style={styles.interactionLabel}>Comments:</Text>
-                    {(result.comments || []).length === 0 ? (
-                      <Text style={styles.interactionLine}>
-                        No comments yet.
-                      </Text>
-                    ) : (
-                      (result.comments || []).map((comment, index) => (
-                        <Text
-                          key={`${result.id}-comment-${index}`}
-                          style={styles.interactionLine}
-                        >
-                          <Text style={styles.interactionCommentAuthor}>
-                            {comment.username}:
-                          </Text>{" "}
-                          {comment.text}
-                        </Text>
-                      ))
-                    )}
+                      return (
+                        <>
+                          <Text style={styles.interactionLine}>
+                            <Text style={styles.interactionLabel}>Likes:</Text>{" "}
+                            {likeNames.length}
+                            {likeNames.length > 0
+                              ? ` (${likeNames.join(", ")})`
+                              : ""}
+                          </Text>
+
+                          <Text style={styles.interactionLabel}>Comments:</Text>
+                          {(interactionData.comments || []).length === 0 ? (
+                            <Text style={styles.interactionLine}>
+                              No comments yet.
+                            </Text>
+                          ) : (
+                            (interactionData.comments || []).map(
+                              (comment, index) => (
+                                <Text
+                                  key={`${result.id}-comment-${index}`}
+                                  style={styles.interactionLine}
+                                >
+                                  <Text style={styles.interactionCommentAuthor}>
+                                    {comment.profiles?.handle || "Friend"}:
+                                  </Text>{" "}
+                                  {comment.comment_text || comment.text || ""}
+                                </Text>
+                              ),
+                            )
+                          )}
+                        </>
+                      );
+                    })()}
                   </View>
                 ) : null}
 
@@ -562,6 +717,20 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.sm,
     gap: theme.spacing.xs,
   },
+  resultHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: theme.spacing.sm,
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+  },
+  iconAction: {
+    padding: 4,
+  },
   type: {
     fontWeight: "700",
     alignSelf: "flex-start",
@@ -606,6 +775,36 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   weeklyLabel: {
+    fontWeight: "700",
+  },
+  managementActions: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    justifyContent: "flex-end",
+    marginTop: theme.spacing.xs,
+  },
+  managementButton: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: "#FFFFFF",
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  managementButtonText: {
+    color: theme.colors.text,
+    fontWeight: "700",
+  },
+  managementButtonDanger: {
+    borderWidth: 1,
+    borderColor: "#F0B4B4",
+    backgroundColor: "#FFF5F5",
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  managementButtonDangerText: {
+    color: "#A33A3A",
     fontWeight: "700",
   },
   interactionBlock: {
