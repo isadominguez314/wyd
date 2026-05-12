@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "wyd-expo-starter",
-    "slug": "wyd-expo-starter",
+    "name": "WYD: Daily Journal",
+    "slug": "wyd-daily-journal",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/app-clip.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "scheme": "wyd",
@@ -14,7 +14,12 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.isadominguez.wyd",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -25,6 +30,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": ["@react-native-community/datetimepicker", "expo-font"],
+    "extra": {
+      "eas": {
+        "projectId": "4c633713-33fb-4f2d-b0fe-c2ea9f1f5414"
+      }
     }
   }
 }

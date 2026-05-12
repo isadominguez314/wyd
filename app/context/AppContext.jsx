@@ -14,6 +14,7 @@ import {
   authSignOut,
   isValidHandle,
 } from "../storage/supabaseClient";
+import supabase from "../storage/supabaseClient";
 import * as DB from "../storage/supabaseService";
 import { buildHabitColorMap } from "../utils/habitColors";
 
@@ -1300,6 +1301,38 @@ export const AppProvider = ({ children }) => {
         } catch (error) {
           console.error("Clear app data error:", error);
           return { ok: false, error: error.message };
+        }
+      },
+
+      deleteAccount: async () => {
+        try {
+          if (!auth.user) return { ok: false, error: "User not authenticated" };
+
+          // Delete DB rows for this user
+          await DB.deleteUserAndData(auth.user.id);
+
+          // Attempt to remove the auth user (requires service role / admin)
+          try {
+            await supabase.auth.admin.deleteUser(auth.user.id);
+          } catch (adminErr) {
+            console.warn("Could not delete auth user via admin API:", adminErr);
+          }
+
+          // Sign out locally and reset state
+          try {
+            await authSignOut();
+          } catch (signoutErr) {
+            console.warn("Error signing out after delete:", signoutErr);
+          }
+
+          setAuth({ user: null, isAuthenticated: false });
+          dispatch({ type: ACTIONS.RESET_STATE });
+          setFriendRequests({ incoming: [], outgoing: [] });
+
+          return { ok: true };
+        } catch (error) {
+          console.error("Delete account error:", error);
+          return { ok: false, error: error.message || String(error) };
         }
       },
 

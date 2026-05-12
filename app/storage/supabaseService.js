@@ -257,8 +257,31 @@ export const getFriendsFeedJournals = async (userId) => {
   const profiles = userIds.length > 0 ? await listProfilesByIds(userIds) : [];
   const profileById = new Map(profiles.map((p) => [p.id, p]));
 
+  // Fetch habits for all journals
+  const journalIds = journals.map((j) => j.id).filter(Boolean);
+  const habitsByJournalId = new Map();
+
+  if (journalIds.length > 0) {
+    const { data: habitLinks, error: habitError } = await supabase
+      .from("daily_journal_habits")
+      .select("journal_id, user_habits(name)")
+      .in("journal_id", journalIds);
+
+    if (!habitError && habitLinks) {
+      habitLinks.forEach((link) => {
+        if (!habitsByJournalId.has(link.journal_id)) {
+          habitsByJournalId.set(link.journal_id, []);
+        }
+        if (link.user_habits?.name) {
+          habitsByJournalId.get(link.journal_id).push(link.user_habits.name);
+        }
+      });
+    }
+  }
+
   return journals.map((j) => ({
     ...j,
+    habits: habitsByJournalId.get(j.id) || [],
     profiles: profileById.get(j.user_id) || null,
   }));
 };
@@ -706,6 +729,152 @@ export const removeFriendship = async (userId1, userId2) => {
     .eq("user_b_id", userB);
 
   if (error) throw error;
+};
+
+/**
+ * Delete a user and all associated data from the public schema.
+ * This performs multiple deletes in a safe order and then removes the
+ * profile row. Caller is responsible for removing the auth user (if desired).
+ */
+export const deleteUserAndData = async (userId) => {
+  try {
+    // Remove friend requests where user is requester or addressee
+    let { error } = await supabase
+      .from("friend_requests")
+      .delete()
+      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`);
+    if (error) throw error;
+
+    // Remove friendships involving the user
+    ({ error } = await supabase
+      .from("friendships")
+      .delete()
+      .or(`user_a_id.eq.${userId},user_b_id.eq.${userId}`));
+    if (error) throw error;
+
+    // Delete likes made by the user
+    ({ error } = await supabase
+      .from("daily_journal_likes")
+      .delete()
+      .eq("user_id", userId));
+    if (error) throw error;
+
+    ({ error } = await supabase
+      .from("weekly_report_likes")
+      .delete()
+      .eq("user_id", userId));
+    if (error) throw error;
+
+    // Delete comments made by the user
+    ({ error } = await supabase
+      .from("daily_journal_comments")
+      .delete()
+      .eq("user_id", userId));
+    if (error) throw error;
+
+    ({ error } = await supabase
+      .from("weekly_report_comments")
+      .delete()
+      .eq("user_id", userId));
+    if (error) throw error;
+
+    // Delete individual entries
+    ({ error } = await supabase
+      .from("individual_entries")
+      .delete()
+      .eq("user_id", userId));
+    if (error) throw error;
+
+    // Delete journals and their habit links
+    // First fetch journal ids
+    const { data: journals } = await supabase
+      .from("daily_journals")
+      .select("id")
+      .eq("user_id", userId);
+    const journalIds = (journals || []).map((j) => j.id);
+
+    if (journalIds.length > 0) {
+      ({ error } = await supabase
+        .from("daily_journal_habits")
+        .delete()
+        .in("journal_id", journalIds));
+      if (error) throw error;
+
+      ({ error } = await supabase
+        .from("daily_journal_comments")
+        .delete()
+        .in("journal_id", journalIds));
+      if (error) throw error;
+
+      ({ error } = await supabase
+        .from("daily_journal_likes")
+        .delete()
+        .in("journal_id", journalIds));
+      if (error) throw error;
+
+      ({ error } = await supabase
+        .from("daily_journals")
+        .delete()
+        .in("id", journalIds));
+      if (error) throw error;
+    }
+
+    // Delete weekly reports and related comments/likes
+    const { data: reports } = await supabase
+      .from("weekly_reports")
+      .select("id")
+      .eq("user_id", userId);
+    const reportIds = (reports || []).map((r) => r.id);
+
+    if (reportIds.length > 0) {
+      ({ error } = await supabase
+        .from("weekly_report_comments")
+        .delete()
+        .in("report_id", reportIds));
+      if (error) throw error;
+
+      ({ error } = await supabase
+        .from("weekly_report_likes")
+        .delete()
+        .in("report_id", reportIds));
+      if (error) throw error;
+
+      ({ error } = await supabase
+        .from("weekly_reports")
+        .delete()
+        .in("id", reportIds));
+      if (error) throw error;
+    }
+
+    // Delete user habits and any habit links
+    const { data: habits } = await supabase
+      .from("user_habits")
+      .select("id")
+      .eq("user_id", userId);
+    const habitIds = (habits || []).map((h) => h.id);
+
+    if (habitIds.length > 0) {
+      ({ error } = await supabase
+        .from("daily_journal_habits")
+        .delete()
+        .in("habit_id", habitIds));
+      if (error) throw error;
+
+      ({ error } = await supabase
+        .from("user_habits")
+        .delete()
+        .in("id", habitIds));
+      if (error) throw error;
+    }
+
+    // Finally, delete the profile row
+    ({ error } = await supabase.from("profiles").delete().eq("id", userId));
+    if (error) throw error;
+
+    return { ok: true };
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const areFriends = async (userId1, userId2) => {

@@ -33,6 +33,7 @@ const ProfileScreen = () => {
     friendRequests,
     searchUsers,
     signOut,
+    deleteAccount,
   } = useAppContext();
 
   const [habitInput, setHabitInput] = useState("");
@@ -226,6 +227,41 @@ const ProfileScreen = () => {
       </SectionCard>
 
       <PrimaryButton label="Sign Out" onPress={signOut} />
+      <PrimaryButton
+        label="Delete Account"
+        onPress={() => {
+          Alert.alert(
+            "Delete account",
+            "This will permanently delete your account and all associated data. This action cannot be undone.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Delete",
+                style: "destructive",
+                onPress: async () => {
+                  try {
+                    const res = await deleteAccount();
+                    if (!res?.ok) {
+                      Alert.alert(
+                        "Error",
+                        res?.error || "Unable to delete account.",
+                      );
+                      return;
+                    }
+                    Alert.alert(
+                      "Deleted",
+                      "Your account and data have been deleted.",
+                    );
+                  } catch (err) {
+                    console.error("Delete account error:", err);
+                    Alert.alert("Error", "Unable to delete account.");
+                  }
+                },
+              },
+            ],
+          );
+        }}
+      />
     </ScreenContainer>
   );
 };

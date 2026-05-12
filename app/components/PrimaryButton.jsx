@@ -9,7 +9,11 @@ const PrimaryButton = ({
   tone = "primary",
 }) => {
   const backgroundColor =
-    tone === "green" ? theme.colors.green : theme.colors.primary;
+    tone === "green"
+      ? theme.colors.green
+      : tone === "danger"
+        ? theme.colors.danger
+        : theme.colors.primary;
 
   return (
     <Pressable
