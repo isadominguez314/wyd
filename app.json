@@ -2,7 +2,7 @@
   "expo": {
     "name": "WYD: Daily Journal",
     "slug": "wyd-daily-journal",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/app-clip.png",
     "userInterfaceStyle": "light",
