@@ -1056,8 +1056,35 @@ export const AppProvider = ({ children }) => {
             return { ok: false, error: "User not authenticated" };
           }
 
-          // For now, we'll just update the UI state
-          // In a real implementation, you'd update habits in Supabase
+          // Get current habits from database to determine what changed
+          const currentHabits = await DB.getUserHabits(auth.user.id);
+
+          const currentHabitNames = new Set(currentHabits.map((h) => h.name));
+          const newHabitNames = new Set(habitsList);
+
+          // Find habits to add and remove
+          const habitsToAdd = habitsList.filter(
+            (name) => !currentHabitNames.has(name),
+          );
+          const habitsToRemove = currentHabits.filter(
+            (h) => !newHabitNames.has(h.name),
+          );
+
+          // Add new habits to database
+          if (habitsToAdd.length > 0) {
+            await Promise.all(
+              habitsToAdd.map((habitName) =>
+                DB.createHabit(auth.user.id, { name: habitName }),
+              ),
+            );
+          }
+
+          // Remove deleted habits from database
+          if (habitsToRemove.length > 0) {
+            await Promise.all(habitsToRemove.map((h) => DB.deleteHabit(h.id)));
+          }
+
+          // Update UI state
           const habitColors = buildHabitColorMap(
             habitsList,
             state.userProfile.habitColors || {},
@@ -1070,7 +1097,6 @@ export const AppProvider = ({ children }) => {
 
           return { ok: true };
         } catch (error) {
-          console.error("Update habits error:", error);
           return { ok: false, error: error.message };
         }
       },

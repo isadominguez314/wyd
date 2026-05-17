@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   Alert,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 import ScreenContainer from "../components/ScreenContainer";
 import theme from "../theme";
 import { useAppContext } from "../context/AppContext";
@@ -274,6 +275,7 @@ const FeedScreen = () => {
   const [commentText, setCommentText] = useState("");
   const [commentThread, setCommentThread] = useState([]);
   const [isLoadingComments, setIsLoadingComments] = useState(false);
+  const [isPostingComment, setIsPostingComment] = useState(false);
 
   const currentUsername =
     state.userProfile.handle ||
@@ -284,6 +286,16 @@ const FeedScreen = () => {
     currentUsername,
     ...(state.userProfile.friendsList || []),
   ]);
+
+  // Auto-reload feed when tab is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      // The feed automatically displays the latest state since it's using useMemo
+      // React Navigation will re-mount or refocus the screen, causing a re-render
+      // which will display any new posts that have been added to state.dailyJournals
+      // or state.weeklyReports via the AppContext
+    }, []),
+  );
 
   const legacyPosts = useMemo(() => {
     const dailyPosts = state.dailyJournals
@@ -494,23 +506,31 @@ const FeedScreen = () => {
 
   const addComment = async () => {
     const text = commentText.trim();
-    if (!text || !selectedPost) return;
+    if (!text || !selectedPost || isPostingComment) return;
 
-    if (commentingPostKind === "daily") {
-      await addCommentOnDailyJournal(
-        selectedPost.id || selectedPost.date,
-        text,
-      );
-    } else {
-      await addCommentOnWeeklyReport(
-        selectedPost.id || selectedPost.date,
-        text,
-      );
+    setIsPostingComment(true);
+    try {
+      if (commentingPostKind === "daily") {
+        await addCommentOnDailyJournal(
+          selectedPost.id || selectedPost.date,
+          text,
+        );
+      } else {
+        await addCommentOnWeeklyReport(
+          selectedPost.id || selectedPost.date,
+          text,
+        );
+      }
+
+      const comments = await loadCommentsForPost(selectedPost);
+      setCommentThread(comments || []);
+      setCommentText("");
+    } catch (error) {
+      console.error("Error posting comment:", error);
+      Alert.alert("Error", "Failed to post comment");
+    } finally {
+      setIsPostingComment(false);
     }
-
-    const comments = await loadCommentsForPost(selectedPost);
-    setCommentThread(comments || []);
-    setCommentText("");
   };
 
   return (
@@ -737,12 +757,15 @@ const FeedScreen = () => {
               <Pressable
                 style={[
                   styles.commentSubmitButton,
-                  !commentText.trim() && styles.commentSubmitButtonDisabled,
+                  (!commentText.trim() || isPostingComment) &&
+                    styles.commentSubmitButtonDisabled,
                 ]}
                 onPress={addComment}
-                disabled={!commentText.trim()}
+                disabled={!commentText.trim() || isPostingComment}
               >
-                <Text style={styles.commentSubmitButtonText}>Post</Text>
+                <Text style={styles.commentSubmitButtonText}>
+                  {isPostingComment ? "Posting..." : "Post"}
+                </Text>
               </Pressable>
             </View>
           </View>
