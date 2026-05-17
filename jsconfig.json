@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "ignoreDeprecations": "6.0",
+    "jsx": "react-jsx",
+    "moduleResolution": "bundler",
+    "target": "es2020"
+  },
+  "include": ["**/*.js", "**/*.jsx"],
+  "exclude": ["node_modules", "**/node_modules", "build", "dist", ".expo"]
+}

@@ -47,7 +47,8 @@ const ProfileScreen = () => {
     const next = habitInput.trim();
     if (!next) return;
     if (state.userProfile.habitsList.includes(next)) return;
-    updateHabits([...state.userProfile.habitsList, next]);
+    const newHabitsList = [...state.userProfile.habitsList, next];
+    updateHabits(newHabitsList);
     setHabitInput("");
   };
 
@@ -66,10 +67,6 @@ const ProfileScreen = () => {
   };
 
   useEffect(() => {
-    console.log("[ProfileScreen] Component mounted/updated");
-    console.log("[ProfileScreen] Outgoing requests:", friendRequests.outgoing);
-    console.log("[ProfileScreen] Incoming requests:", friendRequests.incoming);
-    console.log("[ProfileScreen] Friends list:", state.userProfile.friendsList);
   }, [state.userProfile.friendsList, friendRequests]);
 
   useEffect(() => {
